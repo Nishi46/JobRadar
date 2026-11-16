@@ -51,18 +51,19 @@ Most AI roles at Series A+ startups are posted first on the company's own Greenh
 | `years_min` | int or null | Yes, if not null | Number appears in the cited paragraph |
 | `salary_ranges` | list (possibly empty) of {`location`, `min`, `max`, `currency`, `pay_type`}; `pay_type` is annual_base, ote or hourly | Yes: one paragraph citation covers the whole list | Every `location` appears in `locations`; every number appears in the cited paragraph; cross-checked against ATS compensation when present (below) |
 | `pay_source` | ats, text, none | No | Set by code, not the model |
-
-**ATS cross-check for pay.** When the ATS publishes compensation, code compares it with the LLM's `salary_ranges`. On a disagreement, retry the extraction once; if it still disagrees, display the ATS value and log the disagreement. The LLM's raw output is always stored separately from the displayed value, so ATS compensation stays usable as an eval label in M3.
-
-**Labeling rules** (the golden set and the prompt both follow these)
-- **Track:** a posting can have several tracks; a generalist role spanning platform and product is labeled `[platform, product]`. `other` means a real non-target role; `unknown` means the posting doesn't say enough to tell.
-- **Seniority:** decided by the posting, not only the title. A "Lead" role that manages people is `manager`; otherwise "Lead" is `staff_plus`.
-- **`years_min`:** take the lowest stated number (Doctronic's "3+ with an advanced degree / 7+" → 3; Omni's "3–10+" → 3).
 | `locations` | list of normalized cities or "remote" | Yes | ATS location fields plus golden-set label |
 | `remote_policy` | onsite, hybrid, remote, unknown | Yes | ATS workplace type when present; golden-set label |
 | `visa_sponsorship` | yes, no, unstated | Yes, if not unstated | Golden-set label |
 | `required_skills` | list of taxonomy codes (`docs/SKILLS.md`) | One paragraph per skill | Precision and recall against labels; codes must be in the taxonomy |
 | `preferred_skills` | list of taxonomy codes | One paragraph per skill | Same as above |
+
+**ATS cross-check for pay.** When the ATS publishes compensation, code compares it with the LLM's `salary_ranges`. On a disagreement, retry the extraction once; if it still disagrees, display the ATS value and log the disagreement. The LLM's raw output is always stored separately from the displayed value, so ATS compensation stays usable as an eval label in M3.
+
+**Labeling rules** (the golden set and the prompt both follow these)
+
+- **Track:** a posting can have several tracks; a generalist role spanning platform and product is labeled `[platform, product]`. `other` means a real non-target role; `unknown` means the posting doesn't say enough to tell.
+- **Seniority:** decided by the posting, not only the title. A "Lead" role that manages people is `manager`; otherwise "Lead" is `staff_plus`.
+- **`years_min`:** take the lowest stated number (Doctronic's "3+ with an advanced degree / 7+" → 3; Omni's "3–10+" → 3).
 
 ## 6. Success metrics (proposed targets)
 
