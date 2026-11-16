@@ -1,0 +1,27 @@
+# Local development database. Started by `make dev`, stopped by `make down`.
+# Values come from the environment (see .env.example); the defaults match it.
+name: jobradar
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobradar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobradar}
+      POSTGRES_DB: ${POSTGRES_DB:-jobradar}
+    ports:
+      # Bound to localhost only, so the dev database is not reachable from the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5440}:5432"
+    volumes:
+      # From Postgres 18 the image keeps its data under /var/lib/postgresql
+      # (17 and older used /var/lib/postgresql/data).
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      # $$ defers expansion to the container, which has POSTGRES_USER/POSTGRES_DB set.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres_data:

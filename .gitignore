@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+
+# Node (web/ arrives in M4)
+node_modules/
+.next/
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
