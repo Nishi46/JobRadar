@@ -2,7 +2,7 @@
 
 AI Job Radar watches AI startup job boards, turns each posting into structured fields (skills, pay, seniority, remote policy), and emails people the roles that match them. It is built in seven milestones over three weeks (data first, then the LLM, then evals, then users), then run in production through week 8. I am its first user.
 
-**Current milestone:** M0 _(update this line as you go)_
+**Current milestone:** M1
 
 ## Roadmap
 
