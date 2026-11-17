@@ -52,3 +52,5 @@ jobs:
         working-directory: pipeline
       - run: uv run alembic upgrade head
         working-directory: pipeline
+      # Database tests skip in lint-and-test (no Postgres there); they run here.
+      - run: make test

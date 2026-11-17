@@ -5,13 +5,17 @@ export
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: dev down test lint eval eval-holdout
+.PHONY: dev down seed test lint eval eval-holdout
 
 # Start Postgres, wait for its healthcheck, then apply migrations.
 # Starting the API gets added here in M4.
 dev:
 	$(COMPOSE) up --detach --wait
 	cd pipeline && uv run alembic upgrade head
+
+# Load pipeline/seed/companies.csv into the boards table. Safe to rerun.
+seed:
+	cd pipeline && uv run python -m jobradar.seed
 
 # Stop Postgres. The data volume is kept.
 down:
