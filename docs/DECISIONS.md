@@ -16,6 +16,38 @@ Every non-obvious technical choice: a library, a schema shape, a metric, a thres
 
 ---
 
+## D-008 · 2026-11-17 · Queue jobs hold a lease, and the commit is fenced on it
+
+**Context:** A worker claims a job, sets it to `running`, then gets killed (OOM, deploy, Ctrl-C). Nothing ever moves that row out of `running`, so the board silently stops being polled.
+**Options considered:** Hold one transaction open across claim, fetch and write (Postgres rolls back on crash, but holds a connection and lock during network I/O and hides the `running` state); a separate reaper process that resets stuck jobs (one more thing to run); a lease checked by the claim query itself.
+**Decision:** Claiming sets `locked_by`, `locked_at` and `lease_expires_at` (about 10 minutes) and increments `attempts`. The claim query treats a `running` job with an expired lease as claimable. The final "mark done" step in the per-board transaction only succeeds if this worker still holds the lease; otherwise the whole transaction rolls back.
+**Why:** The next worker looking for work rescues stuck jobs, so nothing extra has to run. The lease is many times longer than a real board run (seconds), because a lease that is too short lets two workers process the same board; upserts survive that, but `missed_polls` would be counted twice and postings would close early. Fencing the commit stops a slow worker from writing stale results over a newer run. Counting attempts at claim time means a board that crashes the worker every time ends up `dead` instead of looping forever.
+**Revisit if:** real board runs approach the lease length, or `dead` jobs show up with no `last_error` (crashes we never see).
+
+## D-007 · 2026-11-17 · A posting closes after 3 consecutive missed polls
+
+**Context:** "Closed" is the only state inferred from absence: a posting just stops appearing. A timeout, a 429 or a glitchy empty response can look like every posting vanished.
+**Options considered:** Close as soon as a posting is missing (fast, but one bad response closes a whole board); close when the drop is under a percentage threshold (fires constantly on small boards, where one closure is 11%); close after N consecutive misses in successful polls.
+**Decision:** A posting closes after missing 3 consecutive successful polls, tracked by a `missed_polls` counter that resets whenever it is seen. Failed fetches (timeouts, 429s after retries) don't count as polls. An empty `{"jobs": []}` response does count, but the first time a non-empty board comes back empty, I get an alert. A posting that reappears goes back to `open` with `reopened_at` set; `first_seen` never changes.
+**Why:** The two errors aren't equal. Closing an open posting is invisible: a real job disappears from feeds and nobody notices. Keeping a closed posting one poll too long costs about 6 hours of staleness, and the user sees "position filled" if they click. So I accept 12–18 hours of delay to make one-off glitches harmless. An empty board still counts so a company that freezes hiring or moves ATS eventually closes; the alert gives me 12 hours to check before it does.
+**Revisit if:** postings often reopen right after closing (N is too small), or users complain about stale postings (N is too large).
+
+## D-006 · 2026-11-17 · Content hash covers only what the LLM reads
+
+**Context:** Change detection needs to tell "edited" from "unchanged". Every edit triggers re-extraction in M2, so a false edit costs money.
+**Options considered:** Hash the full raw JSON (simple, but Greenhouse compliance flags, new API fields or key order would mark every posting edited at once); trust the ATS's `updated_at` (its triggers aren't documented); hash a chosen set of cleaned fields.
+**Decision:** The hash covers the cleaned title, locations and description text. Departments, offices, timestamps and compliance fields are stored (in `ats_raw`) but not hashed. A `cleaner_version` is stored next to the hash. Postings keep only the current text; golden-set and feedback records snapshot the text or its hash when they are made.
+**Why:** "Edited" should mean "the extraction might come out differently", so the hash covers exactly the extraction's inputs: hash what feeds the model, store what feeds the UI. Hashing cleaned text means escaping changes or stray whitespace aren't edits. The catch is that changing the cleaner changes every hash, which is why the version is stored. Snapshotting only labels and feedback, rather than versioning every posting, protects the evals (labels can't drift when an employer edits a posting) without adding a version join to every query.
+**Revisit if:** extractions differ between postings with the same hash (a field that matters isn't hashed), or I want the history of how postings changed over time.
+
+## D-005 · 2026-11-17 · Posting identity is (ats, board_token, external_id)
+
+**Context:** Reruns of the poller must create zero duplicates (M1 gate), including when two pollers run at the same moment.
+**Options considered:** `external_id` alone (an ID is only unique within the system that issued it); `(board_token, external_id)` (works today only because no two ATSs in the seed list share a token); `(ats, board_token, external_id)`.
+**Decision:** `(ats, board_token, external_id)`, enforced as a database unique constraint (stored as `(board_id, external_id)`, where `board_id` stands for one `(ats, board_token)`). Writes use `INSERT … ON CONFLICT DO UPDATE`. A company that moves to a different ATS gets new postings, and the old ones close.
+**Why:** Each ATS names its boards independently, so the key has to include the system that issued the ID. A check in Python can't prevent duplicates: two pollers can both see "doesn't exist" and both insert. The constraint makes the database the referee, and `ON CONFLICT` turns the conflict into the normal update path, since after the first poll almost every write hits an existing row. Linking postings across an ATS move isn't worth the complexity for how rarely it happens.
+**Revisit if:** companies switching ATS turns out to be common enough to break history on the market page.
+
 ## D-004 · 2026-11-11 · Permissive filters, strict ranking
 
 **Context:** Matching applies hard filters (track, seniority, location, pay) in code, but most of the filtered fields come from LLM extraction and can be `unknown` or wrong. Postings with several salary ranges, and users with several acceptable locations, also need a rule for the pay filter.
