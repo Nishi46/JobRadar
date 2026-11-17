@@ -16,6 +16,14 @@ Every non-obvious technical choice: a library, a schema shape, a metric, a thres
 
 ---
 
+## D-009 · 2026-11-17 · Evidence logs are written outside the state transaction
+
+**Context:** Every board fetch is saved to `raw_fetches` (R6). D-008 puts the postings writes and "mark job done" in one transaction that rolls back on any failure. The question is whether the raw fetch belongs inside that transaction.
+**Options considered:** Inside (atomic with the postings, but a crash during processing rolls the response away, and failed fetches never reach that transaction at all); before it, in its own committed transaction (every fetch is recorded, at the cost of an extra commit and occasional rows with no matching postings writes).
+**Decision:** The worker writes the `raw_fetches` row right after the fetch, for every outcome (ok, retryable, permanent), and commits it before parsing and the state transaction begin.
+**Why:** `raw_fetches` is a log of what the server said, and it matters most when something went wrong: reproducing a parser crash, or checking whether a posting that closed was really missing. A log inside the state transaction gets erased by exactly the failures it exists to explain. Atomic transactions are for state that must stay consistent; append-only evidence is written immediately and independently. The same rule applies to `llm_runs` in M2.
+**Revisit if:** raw fetch storage grows faster than retention can trim it.
+
 ## D-008 · 2026-11-17 · Queue jobs hold a lease, and the commit is fenced on it
 
 **Context:** A worker claims a job, sets it to `running`, then gets killed (OOM, deploy, Ctrl-C). Nothing ever moves that row out of `running`, so the board silently stops being polled.

@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 # Runtime dependencies are added in the milestone that first uses them.
 dependencies = [
     "alembic>=1.20.1",
+    "httpx>=0.27",
     "psycopg[binary]>=3.3.9",
     "pydantic>=2.9",
     "sqlalchemy>=2.0",

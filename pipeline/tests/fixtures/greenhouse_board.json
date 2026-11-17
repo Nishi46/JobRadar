@@ -1,0 +1,30 @@
+{
+  "jobs": [
+    {
+      "id": 1000001,
+      "internal_job_id": 2000001,
+      "requisition_id": "R-17",
+      "title": "Applied AI Engineer",
+      "absolute_url": "https://example.com/acme-robotics/jobs/1000001",
+      "updated_at": "2026-11-10T09:30:00-05:00",
+      "first_published": "2026-11-01T12:00:00-05:00",
+      "language": "en",
+      "company_name": "Acme Robotics",
+      "location": {"name": "Remote - US"},
+      "content": "&lt;div&gt;&lt;p&gt;Build evals for R&amp;amp;D robots.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;&lt;/div&gt;",
+      "departments": [{"id": 31, "name": "Research", "parent_id": null, "child_ids": []}],
+      "offices": [{"id": 41, "name": "Remote", "location": "United States", "parent_id": null, "child_ids": []}],
+      "metadata": null,
+      "data_compliance": [{"type": "gdpr", "requires_consent": false, "retention_period": null}]
+    },
+    {
+      "id": 1000002,
+      "title": "Founding Product Designer",
+      "absolute_url": "https://example.com/acme-robotics/jobs/1000002",
+      "updated_at": "2026-11-12T15:00:00-05:00",
+      "location": null,
+      "content": "&lt;p&gt;Design the operator console.&lt;/p&gt;"
+    }
+  ],
+  "meta": {"total": 2}
+}
