@@ -87,15 +87,26 @@ def test_null_departments_become_empty_list(body: dict[str, Any]) -> None:
     assert GreenhouseBoard.model_validate(body).jobs[0].departments == []
 
 
-def test_parse_board_pairs_each_job_with_its_full_raw_item(body: dict[str, Any]) -> None:
-    pairs = parse_board(body)
+def test_parse_board_maps_jobs_onto_posting_input(body: dict[str, Any]) -> None:
+    postings = parse_board(body)
 
-    assert [job.id for job, _ in pairs] == [1000001, 1000002]
-    job, raw = pairs[0]
+    assert [p.external_id for p in postings] == ["1000001", "1000002"]  # ids become strings
+    first = postings[0]
+    assert first.url == "https://example.com/acme-robotics/jobs/1000001"
+    assert first.title == "Applied AI Engineer"
+    assert first.description_html.startswith("<div>")  # unescaped once
+    assert first.locations_raw == ["Remote - US"]
+    assert first.departments == ["Research"]
+    assert first.ats_compensation is None  # Greenhouse publishes no structured pay here
+    assert postings[1].locations_raw == []  # null location -> no locations
+
+
+def test_parse_board_keeps_the_full_raw_item(body: dict[str, Any]) -> None:
+    raw = parse_board(body)[0].ats_raw
+
     assert raw == body["jobs"][0]  # the untouched item, for ats_raw
     assert raw["content"].startswith("&lt;div&gt;")  # raw stays escaped; the model unescapes
     assert raw["departments"][0]["id"] == 31  # nested fields the model ignores are kept
-    assert job.content.startswith("<div>")
 
 
 def test_parse_board_rejects_a_broken_board() -> None:

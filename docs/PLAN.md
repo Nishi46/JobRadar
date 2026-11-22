@@ -2,7 +2,7 @@
 
 AI Job Radar watches AI startup job boards, turns each posting into structured fields (skills, pay, seniority, remote policy), and emails people the roles that match them. It is built in seven milestones over three weeks (data first, then the LLM, then evals, then users), then run in production through week 8. I am its first user.
 
-**Current milestone:** M1
+**Current milestone:** M2 (M1 done 2026-11-21; history for the seed list keeps accruing from the hourly `make ingest`)
 
 ## Roadmap
 
@@ -82,14 +82,14 @@ Get a clean, stable stream of postings into Postgres. Most LLM product quality c
 
 **Build**
 
-- [ ] ATS clients for the public, keyless job-board APIs: Greenhouse (`boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true`), Ashby (`api.ashbyhq.com/posting-api/job-board/{name}?includeCompensation=true`) and Lever
-- [ ] Poller on a schedule (every 6 hours is plenty) that enqueues one job per board; safe to run twice
-- [ ] Postgres job queue with attempts, exponential backoff and a dead-letter status
-- [ ] Normalizer: one `postings` schema across all three ATSs (company, title, location, departments, raw HTML, cleaned text, ATS compensation fields, first seen, last seen)
-- [ ] Change detection: new, edited (content hash changed) and closed (missing from the board) postings
-- [ ] Split each description into numbered paragraphs, stored with IDs, so the LLM can cite them in M2
-- [ ] Polite client: a descriptive User-Agent, low concurrency, caching of raw responses
-- [ ] Two weeks of history for the seed list before moving on
+- [x] ATS clients for the public, keyless job-board APIs: Greenhouse (`boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true`), Ashby (`api.ashbyhq.com/posting-api/job-board/{name}?includeCompensation=true`) and Lever
+- [x] Poller on a schedule (every 6 hours is plenty) that enqueues one job per board; safe to run twice
+- [x] Postgres job queue with attempts, exponential backoff and a dead-letter status
+- [x] Normalizer: one `postings` schema across all three ATSs (company, title, location, departments, raw HTML, cleaned text, ATS compensation fields, first seen, last seen)
+- [x] Change detection: new, edited (content hash changed) and closed (missing from the board) postings
+- [x] Split each description into numbered paragraphs, stored with IDs, so the LLM can cite them in M2
+- [x] Polite client: a descriptive User-Agent, low concurrency, caching of raw responses
+- [ ] Two weeks of history for the seed list (collecting since 2026-11-21 via hourly cron; check again Dec 5)
 
 **What you're learning**
 
@@ -98,6 +98,8 @@ Get a clean, stable stream of postings into Postgres. Most LLM product quality c
 - Data modeling for LLM inputs: clean text and stable paragraph IDs make every later step easier
 - Free labels: Ashby can return structured compensation when the company publishes it, which gives you ground truth for salary extraction in M3
 - Data etiquette: the content belongs to the employer, so link back to the original posting, don't republish full descriptions, and keep the project non-commercial
+
+**Result (2026-11-21):** 165 boards, 4,668 postings, all jobs `done`. An immediate rerun gave 0 new, 0 edited, 4,668 unchanged and 0 new rows, and stored 165 hashes but no bodies. 183 tests pass, ruff and mypy are clean.
 
 **Done when:** every board ingests cleanly; rerunning the poller creates zero duplicates; you can query "new Applied AI postings this week."
 

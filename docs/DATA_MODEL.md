@@ -77,7 +77,8 @@ The Postgres queue (D-001). M1 has one kind of job: poll one board.
 | `last_error` | text null | Why it is retrying or dead |
 | `created_at`, `finished_at` | timestamptz | |
 
-- **Claimable:** (`status in (queued, retrying)` and `run_after <= now()`) or (`status = running` and `lease_expires_at < now()`).
+- **Claimable:** (`status in (queued, retrying)` and `run_after <= now()`) or (`status = running` and `lease_expires_at < now()` and `attempts < max_attempts`). An expired job with no attempts left is marked `dead` by the claim itself (D-010).
+- **Fence token:** `(locked_by, attempts)`. `complete` and `fail` only write when both still match (D-008, D-010).
 - **Index:** `(status, run_after)` for the claim query.
 - **at most one active job per board**, as a partial unique index on `(kind, board_id)` where `status in (queued, retrying, running)`. This makes the poller's enqueue idempotent ("safe to run twice", PLAN M1) with `ON CONFLICT DO NOTHING`, the same pattern as D1.
 
@@ -94,8 +95,22 @@ The Postgres queue (D-001). M1 has one kind of job: poll one board.
 | `body_sha256` | text null | Skip storing `body` when identical to the board's previous fetch |
 | `error` | text null | |
 
-- Retention (not enforced yet): keep 14 days, plus the latest fetch per board. **Open:** measure real response sizes first. Greenhouse with `content=true` can be large, and Neon's free tier is small.
+- **Dedupe as cache (D-012):** a body identical (canonical-JSON sha256) to the board's last *stored* body is recorded as its hash only, with `body = NULL`. `raw_fetches.body_for(board_id, sha)` finds the stored copy.
+- **Measured 2026-11-21** (165 boards, 4,668 postings): one full set of distinct bodies is about 28 MB, and the largest single board is 1.9 MB. An unchanged rerun adds about 0 MB, because every body was stored as its hash only. `postings` itself is about 92 MB, since it holds `description_html`, `cleaned_text`, `paragraphs` and `ats_raw`.
+- Retention (not enforced yet): keep 14 days, plus the latest fetch per board. At about 28 MB per *changed* full set, this fits Neon's 0.5 GB free tier only if boards change slowly; re-measure after a week of hourly runs.
 - Doubles as the debugging record when a posting closes unexpectedly: "was it really missing from the response?"
+
+## How a poll classifies postings
+
+Each poll reads `clock_timestamp()` once as `polled_at` and passes it to every statement (not `now()`, which Postgres freezes for a whole transaction). After the upsert:
+
+| Result | How it is detected |
+|---|---|
+| new | `first_seen = polled_at` (the row was just inserted) |
+| edited | existed, and `content_changed_at = polled_at` (the hash changed) |
+| reopened | was `closed`, so `reopened_at = polled_at` |
+| unchanged | everything else that was seen |
+| missed | `status = open` and `last_seen < polled_at`: not in this response |
 
 ## Scenario walkthroughs
 
@@ -103,6 +118,43 @@ The Postgres queue (D-001). M1 has one kind of job: poll one board.
 2. **Identical rerun.** The poller runs twice: the partial unique index lets only one active job per board exist. Every posting upsert hits `(board_id, external_id)`: `last_seen` moves, the hash matches, and nothing else changes. **Zero new rows** (M1 gate).
 3. **One posting edited, one removed.** Edited: the hash differs, so the text, paragraphs and hash are overwritten and `content_changed_at = now`. M2 later sees that the facts' hash ≠ the posting's hash. Removed: `missed_polls` goes to 1. It closes on the 3rd consecutive miss (`status = closed`, `closed_at = now`). If it reappears later: `open`, `missed_polls = 0`, `reopened_at = now`.
 4. **Worker crash mid-board.** The D8 transaction never committed, so the postings and board are untouched. The job stays `running` until its lease expires, then another worker claims it (`attempts = 2`). After `max_attempts` crashes, the job goes to `dead` with `last_error`.
+
+## Where it lives in code
+
+| Concern | Module |
+|---|---|
+| ATS contract (`PostingInput`, `AtsAdapter`) | `pipeline/src/jobradar/ats/base.py` |
+| Greenhouse / Ashby / Lever adapters | `ats/greenhouse.py`, `ats/ashby.py`, `ats/lever.py`, looked up via `ats/registry.py` |
+| Polite HTTP (User-Agent, timeouts, outcome classes) | `ats/http.py` |
+| HTML → cleaned text + numbered paragraphs, content hash | `clean.py` |
+| Queue: enqueue, claim, complete, fail, backoff | `queue.py` |
+| Raw response log and cache | `raw_fetches.py` |
+| The per-board state transaction (upserts, misses, closes, board observations) | `ingest.py` |
+| Claim → fetch → log → parse → ingest loop | `worker.py` (`make work`) |
+| Enqueue due boards | `poller.py` (`make poll`) |
+| Seed CSV → `boards` | `seed.py` (`make seed`) |
+
+## Useful queries
+
+New Applied AI postings this week. `track` is extracted in M2, so for now this matches on the title:
+
+```sql
+SELECT b.company, p.title, p.locations_raw, p.url, p.first_seen
+FROM postings p JOIN boards b ON b.id = p.board_id
+WHERE p.status = 'open'
+  AND p.first_seen > now() - interval '7 days'
+  AND p.title ~* '(applied ai|ai engineer|llm|forward[- ]deployed|agent)'
+ORDER BY p.first_seen DESC;
+```
+
+Postings edited or closed this week:
+
+```sql
+SELECT 'edited' AS change, count(*) FROM postings
+WHERE content_changed_at > now() - interval '7 days' AND content_changed_at > first_seen
+UNION ALL
+SELECT 'closed', count(*) FROM postings WHERE closed_at > now() - interval '7 days';
+```
 
 ## Not in M1
 

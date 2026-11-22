@@ -25,3 +25,16 @@ def db() -> Iterator[psycopg.Connection[Any]]:
     finally:
         conn.rollback()
         conn.close()
+
+
+# Children before parents: postings, jobs and raw_fetches reference boards with
+# ON DELETE RESTRICT, so deleting boards first fails once the dev database holds
+# real ingested data.
+INGESTION_TABLES = ("raw_fetches", "postings", "jobs", "boards")
+
+
+@pytest.fixture
+def empty_tables(db: psycopg.Connection[Any]) -> None:
+    """Start the test from empty ingestion tables; the db fixture rolls this back."""
+    for table in INGESTION_TABLES:
+        db.execute(f"DELETE FROM {table}")

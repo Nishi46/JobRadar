@@ -28,10 +28,7 @@ def fetch(conn: psycopg.Connection[Any], token: str) -> tuple[Any, ...]:
     return tuple(row)
 
 
-@pytest.fixture(autouse=True)
-def empty_boards(db: psycopg.Connection[Any]) -> None:
-    # Start every test from an empty table; the db fixture rolls this back afterwards.
-    db.execute("DELETE FROM boards")
+pytestmark = pytest.mark.usefixtures("empty_tables")
 
 
 def test_inserts_new_boards(db: psycopg.Connection[Any]) -> None:

@@ -1,0 +1,114 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "0b3f6c1e-1111-4a2b-9c3d-000000000001",
+      "title": "Applied AI Engineer",
+      "department": "Engineering",
+      "team": "Applied AI",
+      "employmentType": "FullTime",
+      "location": "San Francisco, CA",
+      "shouldDisplayCompensationOnJobPostings": true,
+      "secondaryLocations": [
+        {
+          "location": "New York, NY",
+          "address": {"addressLocality": "New York", "addressRegion": "NY", "addressCountry": "USA"}
+        },
+        {
+          "location": "San Francisco, CA",
+          "address": {"addressLocality": "San Francisco", "addressRegion": "CA", "addressCountry": "USA"}
+        }
+      ],
+      "publishedAt": "2026-11-01T17:00:00.000+00:00",
+      "isListed": true,
+      "isRemote": true,
+      "workplaceType": "Hybrid",
+      "address": {
+        "postalAddress": {"addressLocality": "San Francisco", "addressRegion": "CA", "addressCountry": "USA"}
+      },
+      "jobUrl": "https://example.com/acme-robotics/0b3f6c1e-1111-4a2b-9c3d-000000000001",
+      "applyUrl": "https://example.com/acme-robotics/0b3f6c1e-1111-4a2b-9c3d-000000000001/application",
+      "descriptionHtml": "<p>Build evals for R&amp;D robots.</p><ul><li>Python</li></ul>",
+      "descriptionPlain": "Build evals for R&D robots.\n\n- Python",
+      "compensation": {
+        "compensationTierSummary": "$180K – $220K • 0.1% – 0.25%",
+        "scrapeableCompensationSalarySummary": "$180K - $220K",
+        "compensationTiers": [
+          {
+            "id": "tier-0001",
+            "tierSummary": "$180K – $220K • 0.1% – 0.25%",
+            "title": "Zone A",
+            "additionalInformation": null,
+            "components": [
+              {
+                "id": "comp-0001",
+                "summary": "$180K – $220K",
+                "compensationType": "Salary",
+                "interval": "1 YEAR",
+                "currencyCode": "USD",
+                "minValue": 180000,
+                "maxValue": 220000
+              },
+              {
+                "id": "comp-0002",
+                "summary": "0.1% – 0.25%",
+                "compensationType": "EquityPercentage",
+                "interval": "NONE",
+                "currencyCode": null,
+                "minValue": 0.1,
+                "maxValue": 0.25
+              }
+            ]
+          }
+        ],
+        "summaryComponents": [
+          {
+            "compensationType": "Salary",
+            "interval": "1 YEAR",
+            "currencyCode": "USD",
+            "minValue": 180000,
+            "maxValue": 220000
+          }
+        ]
+      }
+    },
+    {
+      "id": "0b3f6c1e-2222-4a2b-9c3d-000000000002",
+      "title": "Founding Product Designer",
+      "department": "Design",
+      "employmentType": "FullTime",
+      "location": "Remote - US",
+      "shouldDisplayCompensationOnJobPostings": false,
+      "secondaryLocations": [],
+      "publishedAt": "2026-11-05T17:00:00.000+00:00",
+      "isListed": true,
+      "isRemote": true,
+      "workplaceType": "Remote",
+      "address": {"postalAddress": {"addressCountry": "USA"}},
+      "jobUrl": "https://example.com/acme-robotics/0b3f6c1e-2222-4a2b-9c3d-000000000002",
+      "applyUrl": "https://example.com/acme-robotics/0b3f6c1e-2222-4a2b-9c3d-000000000002/application",
+      "descriptionHtml": "<p>Design the operator console.</p>",
+      "descriptionPlain": "Design the operator console.",
+      "compensation": null
+    },
+    {
+      "id": "0b3f6c1e-3333-4a2b-9c3d-000000000003",
+      "title": "Internal Transfer: Robotics Lead",
+      "department": "Engineering",
+      "team": "Engineering",
+      "employmentType": "FullTime",
+      "location": "San Francisco, CA",
+      "shouldDisplayCompensationOnJobPostings": false,
+      "secondaryLocations": [],
+      "publishedAt": "2026-11-07T17:00:00.000+00:00",
+      "isListed": false,
+      "isRemote": false,
+      "workplaceType": "OnSite",
+      "address": {"postalAddress": {"addressLocality": "San Francisco", "addressRegion": "CA", "addressCountry": "USA"}},
+      "jobUrl": "https://example.com/acme-robotics/0b3f6c1e-3333-4a2b-9c3d-000000000003",
+      "applyUrl": "https://example.com/acme-robotics/0b3f6c1e-3333-4a2b-9c3d-000000000003/application",
+      "descriptionHtml": "<p>Unlisted role, reachable only by direct link.</p>",
+      "descriptionPlain": "Unlisted role, reachable only by direct link."
+    }
+  ]
+}

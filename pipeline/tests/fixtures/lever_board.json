@@ -1,0 +1,78 @@
+[
+  {
+    "id": "0a1b2c3d-0000-4000-8000-000000000001",
+    "text": "Applied AI Engineer",
+    "createdAt": 1762000000000,
+    "country": "US",
+    "workplaceType": "hybrid",
+    "categories": {
+      "commitment": "Full-time",
+      "department": "Engineering",
+      "team": "Perception",
+      "location": "San Francisco, CA",
+      "allLocations": ["San Francisco, CA", "Toronto, ON", "Remote - US"]
+    },
+    "opening": "<div>Acme Robotics builds warehouse robots.</div>",
+    "openingPlain": "Acme Robotics builds warehouse robots.",
+    "description": "<div>Acme Robotics builds warehouse robots.</div><div><p>Build evals for our planner.</p></div>",
+    "descriptionPlain": "Acme Robotics builds warehouse robots.\nBuild evals for our planner.",
+    "descriptionBody": "<div><p>Build evals for our planner.</p></div>",
+    "descriptionBodyPlain": "Build evals for our planner.",
+    "lists": [
+      {"text": "Requirements", "content": "<li>Python</li><li>3+ years shipping ML</li>"},
+      {"text": "Benefits & Perks", "content": "<li>Equity</li><li>Lunch</li>"}
+    ],
+    "additional": "<div>Acme is an equal opportunity employer.</div>",
+    "additionalPlain": "Acme is an equal opportunity employer.",
+    "salaryRange": {"currency": "USD", "interval": "per-year-salary", "min": 180000, "max": 240000},
+    "salaryDescription": "<div>Base pay only.</div>",
+    "salaryDescriptionPlain": "Base pay only.",
+    "hostedUrl": "https://jobs.example.com/acme-robotics/0a1b2c3d-0000-4000-8000-000000000001",
+    "applyUrl": "https://jobs.example.com/acme-robotics/0a1b2c3d-0000-4000-8000-000000000001/apply"
+  },
+  {
+    "id": "0a1b2c3d-0000-4000-8000-000000000002",
+    "text": "Founding Product Designer",
+    "createdAt": 1762500000000,
+    "country": null,
+    "workplaceType": "on-site",
+    "categories": {
+      "commitment": "Full-time",
+      "department": "Design",
+      "location": "Toronto, ON"
+    },
+    "opening": "",
+    "openingPlain": "",
+    "description": "<p>Design the operator console.</p>",
+    "descriptionPlain": "Design the operator console.",
+    "descriptionBody": "<p>Design the operator console.</p>",
+    "descriptionBodyPlain": "Design the operator console.",
+    "lists": [],
+    "additional": "",
+    "additionalPlain": "",
+    "hostedUrl": "https://jobs.example.com/acme-robotics/0a1b2c3d-0000-4000-8000-000000000002",
+    "applyUrl": "https://jobs.example.com/acme-robotics/0a1b2c3d-0000-4000-8000-000000000002/apply"
+  },
+  {
+    "id": "0a1b2c3d-0000-4000-8000-000000000003",
+    "text": "Robotics Intern",
+    "createdAt": 1763000000000,
+    "country": "US",
+    "workplaceType": "remote",
+    "categories": {
+      "commitment": "Intern",
+      "department": "Research",
+      "team": "Research",
+      "location": "Remote - US",
+      "allLocations": []
+    },
+    "description": "<p>Help us test grippers.</p>",
+    "descriptionPlain": "Help us test grippers.",
+    "lists": [{"text": "What you'll do", "content": "<li>Run experiments</li>"}],
+    "additional": "",
+    "additionalPlain": "",
+    "salaryRange": null,
+    "hostedUrl": "https://jobs.example.com/acme-robotics/0a1b2c3d-0000-4000-8000-000000000003",
+    "applyUrl": "https://jobs.example.com/acme-robotics/0a1b2c3d-0000-4000-8000-000000000003/apply"
+  }
+]

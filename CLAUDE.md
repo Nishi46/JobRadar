@@ -81,7 +81,9 @@ If a task isn't in this table, ask me which mode to use.
 
 Fill these in as they're created in M0.
 
-- `make dev`: start Postgres and the API locally
+- `make dev`: start Postgres and apply migrations (the API joins in M4)
+- `make seed`: load `pipeline/seed/companies.csv` into `boards` (safe to rerun)
+- `make poll` / `make work` / `make ingest`: enqueue due boards / process due jobs / both
 - `make test`: run unit tests
 - `make eval`: run the eval suite against the dev split
 - `make eval-holdout`: run against the holdout (only before a release, and only when I ask)

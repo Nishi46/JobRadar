@@ -5,7 +5,7 @@ export
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: dev down seed test lint eval eval-holdout
+.PHONY: dev down seed poll work ingest test lint eval eval-holdout
 
 # Start Postgres, wait for its healthcheck, then apply migrations.
 # Starting the API gets added here in M4.
@@ -16,6 +16,18 @@ dev:
 # Load pipeline/seed/companies.csv into the boards table. Safe to rerun.
 seed:
 	cd pipeline && uv run python -m jobradar.seed
+
+# Enqueue a poll_board job for every enabled board not polled in the last 6 hours.
+# Safe to run twice: at most one active job per board exists (jobs_one_active_per_board_idx).
+poll:
+	cd pipeline && uv run python -m jobradar.poller
+
+# Process every due job (one board at a time, 1 s apart), then exit.
+work:
+	cd pipeline && uv run python -m jobradar.worker
+
+# One full ingestion cycle. Run hourly from cron to build history (see docs/runbook.md).
+ingest: poll work
 
 # Stop Postgres. The data volume is kept.
 down:

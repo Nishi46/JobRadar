@@ -16,6 +16,38 @@ Every non-obvious technical choice: a library, a schema shape, a metric, a thres
 
 ---
 
+## D-013 · 2026-11-21 · Poller runs hourly; a board is due 6 hours after its last successful poll
+
+**Context:** The plan says to poll every 6 hours. A cron job that runs exactly every 6 hours drifts against `last_polled_at` (a board polled at 00:00:30 isn't "6 hours old" at 06:00), and a laptop that sleeps through one run waits another 6 hours.
+**Options considered:** Cron every 6 hours with a "due after 5.5 hours" slack; cron hourly with "due after 6 hours"; a long-running scheduler process.
+**Decision:** Cron runs `make ingest` hourly. The poller enqueues only enabled boards whose `last_polled_at` is null or more than 6 hours old (`poller.POLL_INTERVAL`).
+**Why:** Running more often than the interval costs nothing, because boards that aren't due are skipped and enqueueing is idempotent. A missed run is caught up within an hour. Real spacing ends up between 6 and 7 hours, which is within the design's ≤ 8-hour freshness target. A failing board keeps its old `last_polled_at`, so it stays due and is retried once its previous job is dead.
+**Revisit if:** we deploy to a host with a real scheduler in M5, or freshness needs to be tighter than 7 hours.
+
+## D-012 · 2026-11-21 · Raw responses are deduplicated by hash, which also makes them the cache
+
+**Context:** R6 says to cache raw responses, and D-009 says to log every fetch. One full set of distinct bodies for 165 boards is about 28 MB (measured), and most boards don't change between polls.
+**Options considered:** Store every body (simple, but about 28 MB per run, more than 100 MB a day hourly); store nothing on success (loses the evidence D-009 exists for); store a body only when it differs from the board's last stored body.
+**Decision:** Every fetch gets a `raw_fetches` row. The body is hashed as canonical JSON (sorted keys, no whitespace); if the hash equals the board's latest stored body's hash, only `body_sha256` is stored and `body` stays NULL.
+**Why:** Every poll stays on record (status, error, and which content it saw) for the cost of a hash when nothing changed. Canonical JSON means a reordered key isn't a "new" body. The unchanged rerun on 2026-11-21 stored 165 hashes and 0 bodies.
+**Revisit if:** some boards return volatile fields (timestamps in every response) so the hash never matches; then hash only the parts we parse.
+
+## D-011 · 2026-11-21 · How descriptions become numbered paragraphs
+
+**Context:** M2 has the LLM cite paragraph IDs, and code checks those citations (for example, a salary number must appear in the cited paragraph). The cleaner's choices decide how precise and how checkable a citation can be.
+**Options considered:** Split on blank lines in a text dump (loses list structure); one paragraph per block element; a third-party HTML library such as BeautifulSoup or selectolax.
+**Decision:** Stdlib `HTMLParser`. Each block element is a paragraph, and so is each `<li>` (prefixed with `- `) and each table row (cells joined with ` | `). A single `<br>` also ends a paragraph. IDs are 1-based positions. Text is unescaped and whitespace collapsed, and characters are never reworded, so `$180,000 – $220,000` keeps its en dash. Zero-width characters are removed. `content_hash` is sha256 over a JSON list of the whitespace-normalized title, the **sorted** locations and the cleaned text. `CLEANER_VERSION` is stored next to the hash, not inside it.
+**Why:** Smaller paragraphs make citations precise: "the salary is in paragraph 14" beats "somewhere in this 400-word block." Many postings use `<br>` instead of `<p>`, so treating it as a break avoids giant paragraphs. Sorting locations stops an ATS reordering them from looking like an edit. Keeping the version out of the hash means a cleaner bump only marks the postings whose text actually changed as edited, so M2 doesn't pay to re-extract identical input. No new dependency is needed for ATS fragment HTML.
+**Revisit if:** M2 citations often need two adjacent paragraphs (splitting too fine), or `<pre>` and code blocks turn out to matter (whitespace is collapsed today). The M2 prompt must show locations in the same sorted order the hash uses.
+
+## D-010 · 2026-11-21 · Queue retry policy: equal-jitter backoff, Retry-After honored, dead on reclaim
+
+**Context:** D-008 defined leases and the fenced commit. Still open: how long to wait between attempts, what to do with a server's `Retry-After`, and what happens to a job whose lease expired on its last attempt.
+**Options considered:** Fixed delay; exponential delay with no jitter (boards that failed together retry together); exponential delay with full jitter (can retry almost immediately); exponential delay with equal jitter.
+**Decision:** The delay is `60 s × 2^(attempts−1)`, capped at 1 hour, with equal jitter (half fixed, half random). A `Retry-After` in seconds sets a floor, itself capped at 6 hours. `max_attempts = 5`, and a 4xx other than 429 goes straight to `dead`. An expired `running` job that has no attempts left is marked `dead` by the claim instead of being run again. The fence token is `(locked_by, attempts)`.
+**Why:** Equal jitter spreads retries out but keeps a floor, so we never hammer a server that just failed. The server knows its own rate limit better than we do, so its `Retry-After` wins, but a bogus value can't park a job for a year. Burying at claim time is what turns "the worker crashes on this board every time" into a visible `dead` row instead of an endless loop. Including `attempts` in the fence means even the same worker, reclaiming its own expired job, can't commit with the stale claim.
+**Revisit if:** dead jobs show up for boards that recover on their own (raise `max_attempts`), or M5's provider retries need different numbers; they get their own constants.
+
 ## D-009 · 2026-11-17 · Evidence logs are written outside the state transaction
 
 **Context:** Every board fetch is saved to `raw_fetches` (R6). D-008 puts the postings writes and "mark job done" in one transaction that rolls back on any failure. The question is whether the raw fetch belongs inside that transaction.
