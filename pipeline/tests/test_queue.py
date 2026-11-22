@@ -15,6 +15,7 @@ from jobradar.queue import (
     backoff_seconds,
     claim,
     complete,
+    enqueue_extract_jobs,
     enqueue_poll_jobs,
     fail,
     worker_id,
@@ -29,6 +30,21 @@ _INSERT_BOARD = """
 def make_board(conn: psycopg.Connection[Any]) -> int:
     token = f"test-queue-{uuid.uuid4().hex[:12]}"
     row = conn.execute(_INSERT_BOARD, (token,)).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+_INSERT_POSTING = """
+    INSERT INTO postings (board_id, external_id, url, title, description_html, cleaned_text,
+                          content_hash, cleaner_version, ats_raw)
+    VALUES (%s, %s, 'https://example.test/job', 'Synthetic Engineer', '<p>x</p>', 'x',
+            'hash', 1, '{}')
+    RETURNING id
+"""
+
+
+def make_posting(conn: psycopg.Connection[Any], board_id: int) -> int:
+    row = conn.execute(_INSERT_POSTING, (board_id, f"ext-{uuid.uuid4().hex[:12]}")).fetchone()
     assert row is not None
     return int(row[0])
 
@@ -349,6 +365,108 @@ def test_retrying_job_is_claimable_once_due(db: psycopg.Connection[Any], board_i
 
     assert again is not None
     assert (again.id, again.attempts) == (job.id, 2)
+
+
+# --- extract_posting jobs ---
+
+
+def test_poll_claim_has_no_posting_id(db: psycopg.Connection[Any], board_id: int) -> None:
+    job = claimed(db, board_id)
+    assert job.posting_id is None
+
+
+def test_enqueue_extract_twice_inserts_once(db: psycopg.Connection[Any], board_id: int) -> None:
+    p1, p2 = make_posting(db, board_id), make_posting(db, board_id)
+
+    assert enqueue_extract_jobs(db, [p1, p2]) == 2
+    assert enqueue_extract_jobs(db, [p1, p2]) == 0  # both still active
+    assert enqueue_extract_jobs(db, [p1, p1]) == 0
+    assert enqueue_extract_jobs(db, []) == 0
+
+
+def test_enqueue_extract_duplicate_ids_in_one_call(
+    db: psycopg.Connection[Any], board_id: int
+) -> None:
+    posting = make_posting(db, board_id)
+    assert enqueue_extract_jobs(db, [posting, posting]) == 1
+
+
+def test_enqueue_extract_skips_unknown_posting(db: psycopg.Connection[Any], board_id: int) -> None:
+    posting = make_posting(db, board_id)
+    assert enqueue_extract_jobs(db, [posting, -1]) == 1
+
+
+def test_extract_job_uses_postings_board(db: psycopg.Connection[Any], board_id: int) -> None:
+    posting = make_posting(db, board_id)
+    enqueue_extract_jobs(db, [posting])
+
+    job = claim(db, "w1", kind="extract_posting")
+
+    assert job is not None
+    assert (job.kind, job.board_id, job.posting_id, job.attempts) == (
+        "extract_posting",
+        board_id,
+        posting,
+        1,
+    )
+
+
+def test_claim_is_per_kind(db: psycopg.Connection[Any], board_id: int) -> None:
+    enqueue_extract_jobs(db, [make_posting(db, board_id)])
+
+    assert claim(db, "w1") is None  # default kind is poll_board
+    assert claim(db, "w1", kind="extract_posting") is not None
+
+
+def test_extract_claims_follow_enqueue_order(db: psycopg.Connection[Any], board_id: int) -> None:
+    # The caller passes postings oldest first; jobs are claimed in that order.
+    p1, p2 = make_posting(db, board_id), make_posting(db, board_id)
+    enqueue_extract_jobs(db, [p2, p1])
+
+    first = claim(db, "w1", kind="extract_posting")
+    second = claim(db, "w1", kind="extract_posting")
+
+    assert first is not None and second is not None
+    assert (first.posting_id, second.posting_id) == (p2, p1)
+
+
+def test_poll_and_extract_jobs_coexist_on_one_board(
+    db: psycopg.Connection[Any], board_id: int
+) -> None:
+    p1, p2 = make_posting(db, board_id), make_posting(db, board_id)
+
+    assert enqueue_poll_jobs(db, [board_id]) == 1
+    assert enqueue_extract_jobs(db, [p1, p2]) == 2
+    # Many active extract jobs on the board don't block a second poll check, and vice versa.
+    assert enqueue_poll_jobs(db, [board_id]) == 0
+    assert active_jobs(db, board_id) == 3
+
+
+def test_extract_job_lifecycle(db: psycopg.Connection[Any], board_id: int) -> None:
+    posting = make_posting(db, board_id)
+    enqueue_extract_jobs(db, [posting])
+    job = claim(db, "w1", kind="extract_posting")
+    assert job is not None
+
+    assert fail(db, job, "HTTP 529 overloaded", retryable=True) == "retrying"
+    db.execute("UPDATE jobs SET run_after = now() WHERE id = %s", (job.id,))
+    again = claim(db, "w2", kind="extract_posting")
+    assert again is not None and again.id == job.id
+    complete(db, again)
+
+    assert job_row(db, job.id)["status"] == "done"
+    assert enqueue_extract_jobs(db, [posting]) == 1  # done is not active
+
+
+def test_posting_id_must_match_kind(db: psycopg.Connection[Any], board_id: int) -> None:
+    posting = make_posting(db, board_id)
+    with pytest.raises(psycopg.errors.CheckViolation), db.transaction():
+        db.execute("INSERT INTO jobs (kind, board_id) VALUES ('extract_posting', %s)", (board_id,))
+    with pytest.raises(psycopg.errors.CheckViolation), db.transaction():
+        db.execute(
+            "INSERT INTO jobs (kind, board_id, posting_id) VALUES ('poll_board', %s, %s)",
+            (board_id, posting),
+        )
 
 
 # --- backoff_seconds (pure) ---

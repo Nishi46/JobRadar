@@ -1,7 +1,7 @@
 """The poller: enqueue one poll_board job per enabled board that is due.
 
 Safe to run twice, or from two machines at once. The partial unique index
-`jobs_one_active_per_board_idx` allows at most one queued/retrying/running job per
+`jobs_one_active_poll_idx` (migration 0003) allows at most one queued/retrying/running job per
 board, and `queue.enqueue_poll_jobs` inserts with ON CONFLICT DO NOTHING, so a second
 run finds every board already queued and inserts nothing (the M1 gate).
 

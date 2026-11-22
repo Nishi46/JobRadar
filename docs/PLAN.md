@@ -2,7 +2,7 @@
 
 AI Job Radar watches AI startup job boards, turns each posting into structured fields (skills, pay, seniority, remote policy), and emails people the roles that match them. It is built in seven milestones over three weeks (data first, then the LLM, then evals, then users), then run in production through week 8. I am its first user.
 
-**Current milestone:** M2 (M1 done 2026-11-21; history for the seed list keeps accruing from the hourly `make ingest`)
+**Current milestone:** M2 (code complete 2026-11-21; waiting on API keys for the first live extraction run)
 
 ## Roadmap
 
@@ -109,17 +109,17 @@ Turn each posting into a structured record you can score, and rank postings for 
 
 **Build: extraction**
 
-- [ ] Pydantic schema `PostingFacts`: role track (platform, product, forward-deployed, research, other), seniority, minimum years, salary min/max/currency (only if stated), location, remote policy, visa sponsorship, required skills and preferred skills (from the taxonomy only), and an evidence paragraph ID for every field
-- [ ] Extraction with a small, cheap model through raw provider SDKs, using structured outputs or tool calling for JSON
-- [ ] Validation in code: schema check, skills must be in the taxonomy, evidence IDs must exist, salary numbers must appear in the cited paragraph; one repair retry, then mark the posting as failed
-- [ ] Prompt registry: prompts in versioned files; the version is saved on every output row
-- [ ] `llm_runs` table: model, prompt version, input and output tokens, cost, latency, outcome
-- [ ] OpenTelemetry tracing into Langfuse for every call
+- [x] Pydantic schema `PostingFacts`: role track (platform, product, forward-deployed, research, other), seniority, minimum years, salary min/max/currency (only if stated), location, remote policy, visa sponsorship, required skills and preferred skills (from the taxonomy only), and an evidence paragraph ID for every field
+- [x] Extraction with a small, cheap model through raw provider SDKs, using structured outputs or tool calling for JSON
+- [x] Validation in code: schema check, skills must be in the taxonomy, evidence IDs must exist, salary numbers must appear in the cited paragraph; one repair retry, then mark the posting as failed
+- [x] Prompt registry: prompts in versioned files; the version is saved on every output row
+- [x] `llm_runs` table: model, prompt version, input and output tokens, cost, latency, outcome
+- [x] OpenTelemetry tracing into Langfuse for every call (built and tested with an in-memory exporter; no span has reached Langfuse yet)
 
 **Build: matching**
 
-- [ ] User profile from a pasted resume, extracted into the same skill taxonomy, which the user can then edit
-- [ ] Two-stage ranking: hard filters in code (location, seniority, track), then a skill-overlap score, then a stronger model re-ranks the top 20 and writes a short "why it matches" plus "skills you'd need" note, citing the posting's paragraphs
+- [x] User profile from a pasted resume, extracted into the same skill taxonomy, which the user can then edit
+- [x] Two-stage ranking: hard filters in code (location, seniority, track), then a skill-overlap score, then a stronger model re-ranks the top 20 and writes a short "why it matches" plus "skills you'd need" note, citing the posting's paragraphs
 
 **What you're learning**
 
@@ -127,6 +127,16 @@ Turn each posting into a structured record you can score, and rank postings for 
 - Grounding by reference: cite paragraph IDs that code can check, never free-text quotes
 - Model tiering: a cheap model for high-volume extraction, a stronger one for the few re-ranked results
 - Cost accounting from day one, and reading a trace to debug one bad output
+
+**Status (2026-11-21):** code complete, nothing run against real APIs yet (no keys in `.env`). 548 tests pass (all providers faked), ruff and mypy strict are clean. Design choices are D-014 to D-021; tables are in `DATA_MODEL.md`.
+
+**Live-run checks (need API keys, still open)**
+
+- [ ] Every open posting has a `posting_facts` row and an `llm_runs` row with a `trace_id` (start with `make extract LIMIT=25`, read the outputs, then run the rest)
+- [ ] Cost per posting known from `make cost` (estimate: $3–5 for the 4,668-posting backfill, D-014); prompt caching confirmed by non-zero `cache_read_tokens`
+- [ ] My own match feed (`make match PROFILE=me`) looks sensible, and the measured re-rank cost per run is compared with DESIGN's ≤ $0.05 per user per week
+
+**Prompt versions and `make eval`:** CLAUDE.md says any prompt change must bump its version and pass `make eval` before it's committed. `make eval` doesn't exist until M3, so that rule can't be satisfied yet. The three v1 prompts (`extract_posting`, `extract_profile`, `rerank`) are the baseline the M3 harness will measure first; don't change them before M3 without bumping the version.
 
 **Done when:** every ingested posting has a validated `PostingFacts` record and a trace, you know the cost per posting, and your own match feed looks sensible.
 

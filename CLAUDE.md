@@ -84,6 +84,10 @@ Fill these in as they're created in M0.
 - `make dev`: start Postgres and apply migrations (the API joins in M4)
 - `make seed`: load `pipeline/seed/companies.csv` into `boards` (safe to rerun)
 - `make poll` / `make work` / `make ingest`: enqueue due boards / process due jobs / both
+- `make extract [LIMIT=N]`: extract `PostingFacts` for stale postings through the queue (costs money; `LIMIT` caps it)
+- `make profile ARGS="create --name N --resume PATH ..."`: profile commands (`create`, `show`, `set-skills`, `forget-resume`)
+- `make match PROFILE=N`: run matching for one profile and print the feed
+- `make cost`: LLM spend for the last 7 days from `llm_runs`
 - `make test`: run unit tests
 - `make eval`: run the eval suite against the dev split
 - `make eval-holdout`: run against the holdout (only before a release, and only when I ask)

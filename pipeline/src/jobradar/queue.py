@@ -31,14 +31,31 @@ MAX_ERROR_CHARS = 2000
 
 _DEAD_ON_RECLAIM = "lease expired after max attempts; worker probably crashed"
 
-# The partial unique index jobs_one_active_per_board_idx allows one active job per
-# (kind, board_id). Naming its predicate in ON CONFLICT makes an existing active job a
-# silent no-op, so enqueueing twice is safe (the M1 gate). DO NOTHING also tolerates the
-# same id appearing twice in one call.
+# The partial unique index jobs_one_active_poll_idx allows one active poll job per board.
+# Naming its predicate in ON CONFLICT makes an existing active job a silent no-op, so
+# enqueueing twice is safe (the M1 gate). The predicate must match the index's WHERE
+# clause (migration 0003), or Postgres finds no index to infer and raises. DO NOTHING
+# also tolerates the same id appearing twice in one call.
 _ENQUEUE = """
     INSERT INTO jobs (kind, board_id)
     SELECT 'poll_board', board_id FROM unnest(%s::bigint[]) AS t (board_id)
-    ON CONFLICT (kind, board_id) WHERE status IN ('queued', 'retrying', 'running')
+    ON CONFLICT (board_id) WHERE kind = 'poll_board' AND status IN ('queued', 'retrying', 'running')
+    DO NOTHING
+"""
+
+# Same idea for extraction, keyed on the posting (jobs_one_active_extract_idx), so a
+# board can have one active poll job *and* many active extract jobs at once. board_id is
+# copied from the posting so jobs.board_id stays NOT NULL and meaningful. Ids with no
+# posting simply join to nothing. WITH ORDINALITY + ORDER BY keeps the caller's order
+# (oldest stale posting first) in the ids, which is the claim order for equal run_after.
+_ENQUEUE_EXTRACT = """
+    INSERT INTO jobs (kind, board_id, posting_id)
+    SELECT 'extract_posting', p.board_id, p.id
+    FROM unnest(%s::bigint[]) WITH ORDINALITY AS t (posting_id, ord)
+    JOIN postings p ON p.id = t.posting_id
+    ORDER BY t.ord
+    ON CONFLICT (posting_id)
+        WHERE kind = 'extract_posting' AND status IN ('queued', 'retrying', 'running')
     DO NOTHING
 """
 
@@ -88,7 +105,7 @@ _CLAIM = """
         LIMIT 1
         FOR UPDATE SKIP LOCKED
     )
-    RETURNING id, kind, board_id, attempts, max_attempts, locked_by
+    RETURNING id, kind, board_id, posting_id, attempts, max_attempts, locked_by
 """
 
 # The fence: (locked_by, attempts) identifies one claim. A reclaim always bumps
@@ -127,10 +144,11 @@ _RNG = random.Random()
 class Job:
     id: int
     kind: str
-    board_id: int
+    board_id: int  # for extract jobs: the posting's board
     attempts: int  # already incremented by the claim
     max_attempts: int
     locked_by: str
+    posting_id: int | None = None  # set exactly for kind 'extract_posting'
 
 
 class LeaseLost(Exception):
@@ -153,6 +171,17 @@ def enqueue_poll_jobs(conn: psycopg.Connection[Any], board_ids: Sequence[int]) -
         return cur.rowcount
 
 
+def enqueue_extract_jobs(conn: psycopg.Connection[Any], posting_ids: Sequence[int]) -> int:
+    """Queue one extract_posting job per posting that has no active one, in the given
+    order. Returns how many were inserted; rerunning inserts nothing. Unknown ids are
+    skipped. Choosing *which* postings need extraction is the caller's job."""
+    if not posting_ids:
+        return 0
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_ENQUEUE_EXTRACT, (list(posting_ids),))
+        return cur.rowcount
+
+
 def claim(conn: psycopg.Connection[Any], worker: str, kind: str = "poll_board") -> Job | None:
     """Claim the oldest due job of `kind` for `worker`, or return None if none is due."""
     with conn.transaction(), conn.cursor() as cur:
@@ -161,11 +190,12 @@ def claim(conn: psycopg.Connection[Any], worker: str, kind: str = "poll_board") 
         row = cur.fetchone()
     if row is None:
         return None
-    job_id, job_kind, board_id, attempts, max_attempts, locked_by = row
+    job_id, job_kind, board_id, posting_id, attempts, max_attempts, locked_by = row
     return Job(
         id=job_id,
         kind=job_kind,
         board_id=board_id,
+        posting_id=posting_id,
         attempts=attempts,
         max_attempts=max_attempts,
         locked_by=locked_by,

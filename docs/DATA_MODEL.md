@@ -1,6 +1,6 @@
-# Data model (M1: ingestion)
+# Data model (M1: ingestion, M2: extraction and matching)
 
-Sketch of the M1 tables.
+Sketch of the tables. M1 is below; M2 starts at [M2: extraction and matching](#m2-extraction-and-matching).
 `D#` refers to the decisions made in the 2026-11-17 design walkthrough. The main ones are written up in `DECISIONS.md`: D1 → D-005, D4 + D5 → D-006, D6 + D7 + D9 + D10 → D-007, D14 → D-008.
 Implemented by `pipeline/migrations/versions/0002_ingestion_tables.py`.
 
@@ -65,7 +65,7 @@ The Postgres queue (D-001). M1 has one kind of job: poll one board.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | bigint PK | |
-| `kind` | text | `poll_board` for now; M2 extraction jobs can reuse the table |
+| `kind` | text | `poll_board`; M2 adds `extract_posting` (see M2 below) |
 | `board_id` | bigint FK → boards | |
 | `status` | text, check in (`queued`, `retrying`, `running`, `done`, `dead`) | D13 |
 | `attempts` | int, default 0 | Incremented at **claim** time, so crashes count (D14) |
@@ -80,7 +80,7 @@ The Postgres queue (D-001). M1 has one kind of job: poll one board.
 - **Claimable:** (`status in (queued, retrying)` and `run_after <= now()`) or (`status = running` and `lease_expires_at < now()` and `attempts < max_attempts`). An expired job with no attempts left is marked `dead` by the claim itself (D-010).
 - **Fence token:** `(locked_by, attempts)`. `complete` and `fail` only write when both still match (D-008, D-010).
 - **Index:** `(status, run_after)` for the claim query.
-- **at most one active job per board**, as a partial unique index on `(kind, board_id)` where `status in (queued, retrying, running)`. This makes the poller's enqueue idempotent ("safe to run twice", PLAN M1) with `ON CONFLICT DO NOTHING`, the same pattern as D1.
+- **at most one active job per board**, as a partial unique index on `(kind, board_id)` where `status in (queued, retrying, running)`. This makes the poller's enqueue idempotent ("safe to run twice", PLAN M1) with `ON CONFLICT DO NOTHING`, the same pattern as D1. M2 splits this index in two (see `jobs` changes below).
 
 ## raw_fetches (R6)
 
@@ -119,6 +119,134 @@ Each poll reads `clock_timestamp()` once as `polled_at` and passes it to every s
 3. **One posting edited, one removed.** Edited: the hash differs, so the text, paragraphs and hash are overwritten and `content_changed_at = now`. M2 later sees that the facts' hash ≠ the posting's hash. Removed: `missed_polls` goes to 1. It closes on the 3rd consecutive miss (`status = closed`, `closed_at = now`). If it reappears later: `open`, `missed_polls = 0`, `reopened_at = now`.
 4. **Worker crash mid-board.** The D8 transaction never committed, so the postings and board are untouched. The job stays `running` until its lease expires, then another worker claims it (`attempts = 2`). After `max_attempts` crashes, the job goes to `dead` with `last_error`.
 
+## M2: extraction and matching
+
+Implemented by `pipeline/migrations/versions/0003_extraction_and_matching.py`. Decisions D-014 to D-021.
+
+FK rules: anything pointing at `postings` is RESTRICT (postings are closed, never deleted). `llm_runs` points at everything with SET NULL, because a cost log must outlive what it was about. `match_runs` and `matches` CASCADE from `profiles`, so deleting a profile takes its match history with it (D-020).
+
+### posting_facts
+
+One row per posting: the **current** extraction. Every attempt's history is in `llm_runs`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `posting_id` | bigint PK, FK → postings, on delete restrict | |
+| `status` | text, check in (`ok`, `failed`) | `failed` = refused, truncated, or still invalid after the repair retry |
+| `facts` | jsonb null | The validated `PostingFacts` exactly as the model returned them. Null when `failed`; a check enforces `status <> 'ok' OR facts IS NOT NULL` |
+| `display_salary` | jsonb, default `[]` | The ranges users see (`decide_pay`): the ATS's when it publishes pay, else the model's (D-018) |
+| `pay_source` | text, check in (`ats`, `text`, `none`) | Set by code, not the model |
+| `pay_disagreement` | bool, default false | ATS and text ranges still differ after the one retry |
+| `issues` | jsonb, default `[]` | `[{"field", "message"}]` from the last attempt; `[]` when ok |
+| `content_hash` | text | The `postings.content_hash` read **before** the call. Stale when it differs from the posting's |
+| `prompt_name`, `prompt_version`, `model` | text, int, text | What produced this row |
+| `llm_run_id` | bigint null, FK → llm_runs, on delete set null | The last attempt's run |
+| `extracted_at` | timestamptz | |
+
+### llm_runs
+
+One row per provider call, whatever the outcome. Evidence, not state: each row is committed in its own transaction right after the call (D-009).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint PK | |
+| `created_at` | timestamptz | |
+| `purpose` | text, check in (`extract_posting`, `extract_profile`, `rerank`) | |
+| `provider` | text, check in (`anthropic`, `openai`) | |
+| `model`, `prompt_name`, `prompt_version` | text, text, int | Read from the prompt file's frontmatter (D-014) |
+| `posting_id` / `profile_id` / `match_run_id` | bigint null, on delete set null | Whichever the call was about |
+| `attempt` | int, default 1 | 2 = the repair retry (D-017) |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | int, default 0 | For Anthropic, `input_tokens` excludes cache tokens; for OpenAI, cached tokens are a subset of input. `pricing.cost_usd` handles both |
+| `cost_usd` | numeric(12,6) null | Null when the model is missing from the price table: unknown, not free |
+| `latency_ms` | int | |
+| `outcome` | text, check in (`ok`, `invalid`, `refused`, `truncated`, `api_error`) | D-015 |
+| `error` | text null | Redacted by `safe_error` for sensitive calls (D-020) |
+| `output` | jsonb null | Parsed output, or `{"raw_text": ...}` when it didn't parse. **Always null for sensitive calls** (resumes, re-rank) |
+| `trace_id` | text null | Langfuse/OTel trace id (32 hex); null when tracing is off |
+
+- **Indexes:** `(created_at)`, `(posting_id)`, `(purpose, created_at)`.
+
+### profiles
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint PK | |
+| `name` | text unique | What the CLI uses (`make match PROFILE=me`) |
+| `resume_text` | text null | Personal data. `forget-resume` sets it to null and keeps the facts |
+| `facts` | jsonb | `ProfileFacts` (skills, tracks, seniority, years_experience): the LLM's draft, then whatever the user edits it to. The edited version is ground truth |
+| `filters` | jsonb | `MatchFilters` (tracks, seniorities, locations, remote_ok, min_pay_usd), set by the user |
+| `created_at`, `updated_at` | timestamptz | |
+
+Matching reads only `facts` and `filters`, never `resume_text`.
+
+### match_runs
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint PK | |
+| `profile_id` | bigint FK → profiles, on delete cascade | |
+| `created_at` | timestamptz | |
+| `candidates`, `passed_filters`, `reranked` | int | The funnel: considered → passed filters → re-ranked items that passed validation |
+| `status` | text, check in (`ok`, `rerank_failed`) | `rerank_failed` = the feed is in stage-1 (overlap score) order |
+
+- **Index:** `(profile_id, created_at)`.
+
+### matches
+
+| Column | Type | Notes |
+|---|---|---|
+| `match_run_id` | bigint FK → match_runs, on delete cascade | |
+| `posting_id` | bigint FK → postings, on delete restrict | |
+| `stage1_rank` | int | Rank by overlap score (ties: newer first) |
+| `overlap_score` | real, 0..1 | D-021 |
+| `final_rank` | int null | Re-ranker order; written as `stage1_rank` first, so a crash or a failed re-rank leaves the fallback order |
+| `why` | text null | One sentence from the re-ranker |
+| `why_evidence` | int[] | Paragraph ids backing `why`; checked against the paragraphs the model was shown |
+| `skills_to_learn` | text[] | Taxonomy codes only |
+
+- **PK:** `(match_run_id, posting_id)`. **Index:** `(posting_id)`.
+
+### jobs changes
+
+Extraction reuses the M1 queue (D-019).
+
+| Change | Notes |
+|---|---|
+| `kind` check widened to (`poll_board`, `extract_posting`) | |
+| `posting_id` bigint null, FK → postings | Set exactly when `kind = 'extract_posting'` (check: `(kind = 'poll_board') = (posting_id IS NULL)`). Extract jobs keep `board_id` = the posting's board, so `board_id` stays not null |
+| `jobs_one_active_per_board_idx` dropped | It allowed one active job per `(kind, board)`, which would mean one extraction per *board* at a time |
+| `jobs_one_active_poll_idx` | Unique on `(board_id)` where `kind = 'poll_board'` and status is active |
+| `jobs_one_active_extract_idx` | Unique on `(posting_id)` where `kind = 'extract_posting'` and status is active |
+
+The `ON CONFLICT` clauses in `queue.py` repeat each index's predicate word for word, or Postgres can't match them to the index. A poll job and an extract job for the same board can both be active.
+
+### How a posting goes stale
+
+`extract.stale_posting_ids` picks open postings where any of these holds, oldest first:
+
+| Condition | Why |
+|---|---|
+| No `posting_facts` row | Never extracted |
+| `posting_facts.content_hash <> postings.content_hash` | Edited since (D-006: the hash covers exactly what the model reads) |
+| `posting_facts.prompt_version` differs from the newest prompt on disk | A prompt bump re-extracts everything (D-014) |
+
+A `failed` row on the current hash and prompt version is **not** stale: the same input would cost the same and fail the same way. Closed postings are skipped. Matching only uses fresh facts (`f.content_hash = p.content_hash`).
+
+### Extraction flow
+
+1. **First extraction.** `make extract` enqueues one `extract_posting` job per stale posting (the partial unique index makes a rerun enqueue 0). The worker claims a job, reads the posting and its `content_hash`, renders the prompt (paragraph `[0]` is the derived header, D-016) and calls the model inside a tracing span. The `llm_runs` row commits at once. Code validates the output. In one transaction it upserts `posting_facts` (`status = ok`) and marks the job `done`, fenced on the lease.
+2. **Fixable problem.** Output that fails the schema or `validate_facts` (say, a salary number not in the cited paragraph) gets one repair call (`attempt = 2`): the same prompt, plus the previous answer and the issue list. If it passes, the row is `ok`. If not, the row is `failed` with the issues, and the job is still `done` (D-017).
+3. **Pay disagreement.** A valid answer whose ranges don't match the ATS's structured pay uses the same single retry, without being shown the ATS numbers. If it still disagrees: `ok`, `display_salary` = the ATS ranges, `pay_source = ats`, `pay_disagreement = true` (D-018).
+4. **Refused or truncated.** `failed` at once, no retry: the same input would refuse or overflow again.
+5. **API outage.** A retryable `api_error` (429, 5xx or a connection error, after the SDK's own 2 retries) writes the `llm_runs` row but no facts. The job goes to `retrying` with backoff and the posting stays stale. A non-retryable one (400, 401, unknown model) makes the job `dead`.
+6. **Posting edited mid-extraction.** The facts are stored with the hash read at the start, so they are immediately stale and the next `make extract` redoes them.
+7. **Lease lost.** `queue.complete` raises `LeaseLost` as the last statement of the state transaction, so the facts write rolls back. The `llm_runs` rows stay (D-009).
+8. **Prompt bump.** A new `extract_posting.v2.md` makes every open posting stale. `make extract` re-extracts them all, and each row records `prompt_version = 2`.
+
+### How matching works
+
+`make match PROFILE=me` (D-021): candidates are open postings with fresh `ok` facts first seen in the last 30 days → code filters (D-004) → overlap score → top 20 → re-rank model (sensitive call) → validated output → `matches`. The `match_runs` and `matches` rows are written first in stage-1 order with `status = rerank_failed`; a valid re-rank then updates the ranks and flips the status to `ok`.
+
 ## Where it lives in code
 
 | Concern | Module |
@@ -133,17 +261,35 @@ Each poll reads `clock_timestamp()` once as `polled_at` and passes it to every s
 | Claim → fetch → log → parse → ingest loop | `worker.py` (`make work`) |
 | Enqueue due boards | `poller.py` (`make poll`) |
 | Seed CSV → `boards` | `seed.py` (`make seed`) |
+| Skill taxonomy (the 34 codes from `docs/SKILLS.md`) | `taxonomy.py` |
+| `PostingFacts` schema (exactly the JSON the model returns) | `facts.py` |
+| Validation rules, ATS pay normalization, `decide_pay` | `validate.py` |
+| Prompt files (`prompts/*.vN.md`) and their frontmatter | `prompts.py` |
+| Rendering the posting (header as `[0]`), taxonomy, profile and candidates for prompts | `render.py` |
+| Provider contract (`LLMCall`, `LLMResult`, outcomes) | `llm/base.py` |
+| Anthropic / OpenAI calls, prices, client construction | `llm/anthropic_provider.py`, `llm/openai_provider.py`, `llm/pricing.py`, `llm/registry.py` |
+| One posting: call → validate → repair once → pay check → store | `extract.py` |
+| Enqueue stale postings, drain extract jobs | `extract_worker.py` (`make extract`) |
+| The LLM call log and cost summary | `llm_runs.py` (`make cost`) |
+| OpenTelemetry spans into Langfuse | `tracing.py` |
+| Profiles from a resume, plus filters | `profiles.py` (`make profile`) |
+| Filters, overlap score, re-rank and its validation, feed | `match.py` (`make match`) |
 
 ## Useful queries
 
-New Applied AI postings this week. `track` is extracted in M2, so for now this matches on the title:
+New Applied AI postings this week, from the extracted `track` (fresh `ok` facts only). Before M2 this matched a regex on the title:
 
 ```sql
-SELECT b.company, p.title, p.locations_raw, p.url, p.first_seen
-FROM postings p JOIN boards b ON b.id = p.board_id
+SELECT b.company, p.title, f.facts -> 'track' -> 'value' AS track,
+       f.facts -> 'seniority' ->> 'value' AS seniority, f.display_salary, p.url, p.first_seen
+FROM postings p
+JOIN boards b        ON b.id = p.board_id
+JOIN posting_facts f ON f.posting_id = p.id
 WHERE p.status = 'open'
   AND p.first_seen > now() - interval '7 days'
-  AND p.title ~* '(applied ai|ai engineer|llm|forward[- ]deployed|agent)'
+  AND f.status = 'ok'
+  AND f.content_hash = p.content_hash
+  AND f.facts -> 'track' -> 'value' ?| array['forward_deployed', 'product', 'platform']
 ORDER BY p.first_seen DESC;
 ```
 
@@ -156,6 +302,45 @@ UNION ALL
 SELECT 'closed', count(*) FROM postings WHERE closed_at > now() - interval '7 days';
 ```
 
-## Not in M1
+Extraction cost per posting, by prompt version (all attempts, including repair retries):
 
-`posting_facts` and `llm_runs` (M2), `feedback` and `notifications_sent` (M4, leaning toward option (c): one row per user/posting with a re-email interval).
+```sql
+SELECT prompt_version, model,
+       count(DISTINCT posting_id) AS postings,
+       count(*) AS calls,
+       round(sum(cost_usd) / nullif(count(DISTINCT posting_id), 0), 6) AS cost_per_posting,
+       count(*) FILTER (WHERE cost_usd IS NULL) AS unpriced_calls
+FROM llm_runs
+WHERE purpose = 'extract_posting' AND posting_id IS NOT NULL
+GROUP BY prompt_version, model
+ORDER BY prompt_version;
+```
+
+Failed extractions with their issues, one row per issue:
+
+```sql
+SELECT f.posting_id, b.company, p.title, i ->> 'field' AS field, i ->> 'message' AS message, p.url
+FROM posting_facts f
+JOIN postings p ON p.id = f.posting_id
+JOIN boards b   ON b.id = p.board_id
+CROSS JOIN LATERAL jsonb_array_elements(f.issues) AS i
+WHERE f.status = 'failed'
+ORDER BY f.extracted_at DESC;
+```
+
+Pay disagreements: what the text said next to what the ATS publishes (and users see):
+
+```sql
+SELECT f.posting_id, b.company, p.title,
+       f.facts -> 'salary' -> 'ranges' AS text_ranges,
+       f.display_salary                AS ats_ranges, p.url
+FROM posting_facts f
+JOIN postings p ON p.id = f.posting_id
+JOIN boards b   ON b.id = p.board_id
+WHERE f.pay_disagreement
+ORDER BY f.extracted_at DESC;
+```
+
+## Not yet built
+
+`feedback` and `notifications_sent` (M4, leaning toward option (c): one row per user/posting with a re-email interval). Normalized locations live only inside `posting_facts.facts`; there is no separate locations table.

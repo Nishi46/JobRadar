@@ -27,10 +27,21 @@ def db() -> Iterator[psycopg.Connection[Any]]:
         conn.close()
 
 
-# Children before parents: postings, jobs and raw_fetches reference boards with
-# ON DELETE RESTRICT, so deleting boards first fails once the dev database holds
-# real ingested data.
-INGESTION_TABLES = ("raw_fetches", "postings", "jobs", "boards")
+# Children before parents: every table here is referenced by the ones before it with
+# ON DELETE RESTRICT, so deleting a parent first fails once the dev database holds
+# real data. M2 tables (matches, posting_facts, llm_runs, profiles) come first because
+# they reference postings and jobs.
+INGESTION_TABLES = (
+    "matches",
+    "match_runs",
+    "llm_runs",
+    "posting_facts",
+    "profiles",
+    "raw_fetches",
+    "jobs",
+    "postings",
+    "boards",
+)
 
 
 @pytest.fixture

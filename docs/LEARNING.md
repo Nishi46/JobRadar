@@ -19,6 +19,34 @@ One entry per work session, newest first. Claude appends an entry when you say "
 
 <!-- Entries go below this line, newest first -->
 
+## 2026-11-21 · M2 · Extraction, validation, providers, tracing, profiles and matching: code complete
+
+**Mode:** Delegate (six parallel agents building against one written contract: schema + validation, providers, migration + queue + `llm_runs` + tracing, prompts + rendering, profiles + matching, the extraction pipeline).
+**Built:** Migration 0003 (`posting_facts`, `llm_runs`, `profiles`, `match_runs`, `matches`, and `extract_posting` jobs on the same queue). The `PostingFacts` schema and the 34-code taxonomy. `validate.py` (citations, taxonomy, salary numbers in the cited text, ATS pay normalization, `decide_pay`). Anthropic and OpenAI providers with a closed set of outcomes and per-call cost. Versioned prompt files with the model in the frontmatter (`extract_posting.v1`, `extract_profile.v1`, `rerank.v1`). OpenTelemetry spans for Langfuse. The extraction pipeline and worker (one bounded retry, fenced commit). Profiles from a resume, and two-stage matching. `make extract`, `make profile`, `make match`, `make cost`. Decisions D-014 to D-021.
+**Results:** 548 tests pass with every provider faked, and ruff and mypy strict are clean. **Nothing has run against a real API yet** (no keys in `.env`), so there are no real numbers on cost, failure rate or quality.
+**Learned:**
+- *Structured outputs are a request, not a guarantee, so validate in code.* The schema constrains the JSON's shape, but only code can check that paragraph 14 exists, that "180000" appears in it, and that `EVALS` is in the taxonomy. Code checks every posting for free; an eval only samples.
+- *Grounding by citation that code checks.* The model cites paragraph ids, never free-text quotes, so a check can look up the paragraph and confirm the number is there. This makes an invented salary impossible to store, not just unlikely. The header is paragraph 0 so ATS-only facts (locations, remote) are citable, but numbers can't cite it (D-016).
+- *Why the SDK's parse helpers were bypassed.* `messages.parse` and `responses.parse` raise on bad or truncated output and lose both the text and the token usage. The repair retry needs the text, and cost accounting needs the usage of calls that failed. So we call `create` with the SDK's own schema converter and validate ourselves (D-015).
+- *Model tiering.* A small model reads thousands of postings against a fixed schema; a stronger model ranks 20 per user and writes the "why." Putting the model in the prompt file makes a model change a version bump, so the eval gate covers it (D-014).
+- *One bounded repair retry.* Show the model its previous answer and the list of problems, once. That caps the worst case at two calls per posting. A posting still wrong after that is a `failed` row with its issues, which is error-analysis data for M3 (D-017).
+- *Cost accounting per call from day one.* Every call, including refused and failed ones, gets an `llm_runs` row with tokens, cost and latency, committed outside the state transaction (D-009), so a rollback can't erase what we paid for.
+- *Keep ATS pay an independent label.* Users see the ATS pay when it exists, but the model never sees it, not even in the disagreement retry. If it did, it would copy the numbers and M3 couldn't use ATS pay to score salary extraction. "ATS has pay, text has none" isn't a disagreement, because the retry would pressure the model to invent a salary (D-018).
+- *Personal data in traces.* Resume and re-rank calls are flagged `sensitive`: no text in `llm_runs.output` or spans, and errors are redacted because a validation error quotes the output. The SDK's built-in OTel is turned off so it can't leak content around our rule (D-020).
+**Teach areas that were delegated:** CLAUDE.md lists the `PostingFacts` schema, validation rules, the extraction prompt, retry logic and cost accounting as Teach areas for M2, and all of them were written by agents. Before M3, walk through `pipeline/src/jobradar/extract.py`, `pipeline/src/jobradar/validate.py` and `prompts/extract_posting.v1.md` yourself (say "quiz me" or "explain"), and rewrite the D-014 to D-021 "Why" lines in your own words where you disagree.
+**Mistakes:** _(fill in: what would you have designed differently if you'd written the schema, prompt and validator yourself?)_
+**Predictions vs. reality:** _(fill in before the first `make extract LIMIT=25`: what share will be `ok`, which issue field will fail most, what cost per posting, and will `cache_read_tokens` be non-zero? Then compare.)_
+**Open questions:**
+- **Labeling rules made in the prompt that you must confirm**, because the M3 golden-set labels have to follow the same rules or the evals measure a disagreement about rules, not extraction quality: a span of levels ("Senior/Staff") takes the lowest; with no stated level, years decide it (under 2 junior, 2–4 mid, 5–7 senior, 8+ staff_plus); one-sided pay ("up to $250K") is skipped; "must be authorized to work in the US" on its own is `unstated` visa; track `other` means any role that isn't AI engineering, including engineering that doesn't build AI systems.
+- Location matching is a case-insensitive substring match, so a user location "US" matches "Austin, TX" (the "us" in "Austin"), and "CA" matches "Canada" and "Chicago". Short or region-level user locations need real normalization, or exact matching on the normalized values.
+- The $5,000 pay tolerance is in dollars, so every hourly range agrees with every other within $5K/hr. Hourly needs its own tolerance.
+- Ashby monthly pay (and bonus, equity) is dropped from the ATS ranges. How common is it on these boards?
+- A salary listed across several paragraphs (one range per city, each in its own `<li>`) fails the single-citation check (D-003's revisit condition). How many real postings do this?
+- `skills_to_learn` is the posting's required skills minus the profile's skills: plain set arithmetic. Should code compute it instead of the re-rank model?
+- The re-rank is estimated at $0.08–0.10 per user per run, over DESIGN's ≤ $0.05 per user per week. Measure it, then decide: fewer candidates, a smaller input, or a cheaper model.
+- Each attempt is its own Langfuse trace; there's no parent span per posting tying attempt 1 and the repair retry together. Add one before M3 error analysis?
+**Interview story candidate?** yes: "every salary number must appear in the paragraph the model cites" turns the worst extraction error (an invented salary) from a rate an eval estimates into something code rules out, and the ATS pay is kept away from the model so it stays an honest label.
+
 ## 2026-11-21 · M1 · Ashby and Lever clients, cleaner, queue, worker, poller: M1 done
 
 **Mode:** Delegate (I asked Claude to write it; four parts were built in parallel by agents against one shared contract).

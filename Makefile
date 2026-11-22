@@ -5,7 +5,7 @@ export
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: dev down seed poll work ingest test lint eval eval-holdout
+.PHONY: dev down seed poll work ingest extract match profile cost test lint eval eval-holdout
 
 # Start Postgres, wait for its healthcheck, then apply migrations.
 # Starting the API gets added here in M4.
@@ -18,7 +18,7 @@ seed:
 	cd pipeline && uv run python -m jobradar.seed
 
 # Enqueue a poll_board job for every enabled board not polled in the last 6 hours.
-# Safe to run twice: at most one active job per board exists (jobs_one_active_per_board_idx).
+# Safe to run twice: at most one active job per board exists (jobs_one_active_poll_idx).
 poll:
 	cd pipeline && uv run python -m jobradar.poller
 
@@ -28,6 +28,27 @@ work:
 
 # One full ingestion cycle. Run hourly from cron to build history (see docs/runbook.md).
 ingest: poll work
+
+# Extract PostingFacts for every stale posting (new, edited, or older prompt version),
+# through the job queue. Costs money: LIMIT caps how many postings are enqueued and run.
+#   make extract LIMIT=25
+extract:
+	cd pipeline && uv run python -m jobradar.extract_worker $(if $(LIMIT),--limit $(LIMIT))
+
+# Run matching for one profile and print its feed:  make match PROFILE=me
+match:
+	@test -n "$(PROFILE)" || { echo "usage: make match PROFILE=<name>" >&2; exit 1; }
+	cd pipeline && uv run python -m jobradar.match --profile "$(PROFILE)"
+
+# Profile commands, passed straight through. Examples:
+#   make profile ARGS="create --name me --resume ~/resume.md --min-pay 150000"
+#   make profile ARGS="show --name me"
+profile:
+	cd pipeline && uv run python -m jobradar.profiles $(ARGS)
+
+# LLM spend for the last 7 days, by purpose / model / prompt version (from llm_runs).
+cost:
+	cd pipeline && uv run python -m jobradar.llm_runs
 
 # Stop Postgres. The data volume is kept.
 down:
