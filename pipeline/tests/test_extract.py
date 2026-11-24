@@ -48,6 +48,10 @@ def run_attempts(db: Conn) -> list[tuple[int, str]]:
     return [(r[0], r[1]) for r in rows]
 
 
+def run_errors(db: Conn) -> list[str | None]:
+    return [r[0] for r in db.execute("SELECT error FROM llm_runs ORDER BY id").fetchall()]
+
+
 # --- happy path ---------------------------------------------------------------------
 
 
@@ -127,7 +131,14 @@ def test_repair_retry_fixes_a_validation_issue(db: Conn, posting_id: int) -> Non
     assert "NOT_A_SKILL" in repair.user
     assert "required_skills[0].code" in repair.user
     assert repair.system == first.system  # unchanged system prompt keeps the cache warm
-    assert run_attempts(db) == [(1, "ok"), (2, "ok")]
+    # The rejected first answer is on record as invalid, with the reason, so make cost
+    # counts it and M3 error analysis can read why the retry happened.
+    assert run_attempts(db) == [(1, "invalid"), (2, "ok")]
+    first_error, repair_error = run_errors(db)
+    assert first_error is not None
+    assert first_error.startswith("validation: ")
+    assert "required_skills[0].code" in first_error
+    assert repair_error is None
     row = facts_row(db, posting_id)
     assert row is not None
     assert row["status"] == "ok"
@@ -150,6 +161,8 @@ def test_still_invalid_after_the_retry_is_failed_with_issues(db: Conn, posting_i
     assert row["issues"][0]["message"]
     assert (row["display_salary"], row["pay_source"]) == ([], "none")
     assert len(provider.calls) == 2  # one repair retry, never more
+    assert run_attempts(db) == [(1, "invalid"), (2, "invalid")]
+    assert all("required_skills[0].code" in (e or "") for e in run_errors(db))
 
 
 def test_schema_invalid_output_gets_the_repair_retry(db: Conn, posting_id: int) -> None:
@@ -227,7 +240,7 @@ def test_api_error_during_the_repair_also_writes_nothing(db: Conn, posting_id: i
 
     assert info.value.cost_usd == pytest.approx(0.002)
     assert facts_row(db, posting_id) is None
-    assert run_attempts(db) == [(1, "ok"), (2, "api_error")]
+    assert run_attempts(db) == [(1, "invalid"), (2, "api_error")]
 
 
 def test_non_retryable_api_error_is_reported_as_such(db: Conn, posting_id: int) -> None:
@@ -261,6 +274,12 @@ def test_ats_disagreement_retries_then_displays_ats_pay(db: Conn) -> None:
     repair = provider.calls[1]
     assert "250" not in repair.user.removeprefix(provider.calls[0].user)
     assert "salary" in repair.user.removeprefix(provider.calls[0].user)
+    # A disagreement is not an invalid answer (it is stored as the model's label), but
+    # the reason for the second call is still recorded on the first run.
+    assert run_attempts(db) == [(1, "ok"), (2, "ok")]
+    first_error = run_errors(db)[0]
+    assert first_error is not None
+    assert first_error.startswith("pay disagreement: ")
 
 
 def test_ats_agreement_needs_no_retry(db: Conn) -> None:
