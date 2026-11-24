@@ -45,7 +45,7 @@ from psycopg.types.json import Jsonb
 from jobradar import queue
 from jobradar.facts import PostingFacts, SalaryRange
 from jobradar.llm.base import LLMCall, LLMResult, Provider
-from jobradar.llm_runs import annotate_run, record_run
+from jobradar.llm_runs import record_run
 from jobradar.prompts import Prompt, load_prompt
 from jobradar.render import (
     ats_hints_from_raw,
@@ -250,7 +250,6 @@ def extract_posting(
     result = _call(conn, provider, first_call, posting_id, totals)
     issues, repairable = _check(result, cited)
     pay = _pay(result, issues, ats_ranges)
-    _record_verdict(conn, totals, result, issues, pay)
 
     # The single retry: for fixable problems first, otherwise for a pay disagreement.
     retry_for: list[Issue] = []
@@ -263,7 +262,6 @@ def extract_posting(
         result = _call(conn, provider, repair_call, posting_id, totals)
         issues, _ = _check(result, cited)
         pay = _pay(result, issues, ats_ranges)
-        _record_verdict(conn, totals, result, issues, pay)
 
     ok = result.parsed is not None and not issues
     if ok and pay is not None and pay.disagreement:
@@ -349,31 +347,6 @@ def _check(
         return [Issue(field="truncated", message=message)], False
     # "ok" without a parsed value would be a provider bug; treat it as unusable output.
     return [Issue(field="schema", message=f"no parsed output (outcome {result.outcome})")], True
-
-
-def _record_verdict(
-    conn: psycopg.Connection[Any],
-    totals: _Attempts,
-    result: LLMResult[PostingFacts],
-    issues: list[Issue],
-    pay: PayDecision | None,
-) -> None:
-    """Write our checks' verdict onto the llm_runs row of the attempt just made.
-
-    The provider said "ok", but validation may have rejected the answer: that run becomes
-    'invalid' with the issues as its error, so `make cost` counts it and M3 error analysis
-    can see why a retry happened. A pay disagreement is not invalid (the answer is kept
-    as the model's label), so the outcome stays 'ok' and only the reason is noted.
-    Non-ok outcomes already carry the provider's own error and are left alone.
-    """
-    if result.outcome != "ok":
-        return
-    run_id = totals.run_ids[-1]
-    if issues:
-        reasons = "; ".join(f"{i.field}: {i.message}" for i in issues)
-        annotate_run(conn, run_id, outcome="invalid", error=f"validation: {reasons}")
-    elif pay is not None and pay.disagreement:
-        annotate_run(conn, run_id, outcome="ok", error=f"pay disagreement: {pay.detail}")
 
 
 def _pay(

@@ -7,14 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from jobradar.llm.base import LLMCall, LLMResult
-from jobradar.llm_runs import (
-    MAX_ERROR_CHARS,
-    annotate_run,
-    cost_summary,
-    format_summary,
-    record_run,
-    safe_error,
-)
+from jobradar.llm_runs import cost_summary, format_summary, record_run, safe_error
 
 
 class Out(BaseModel):
@@ -111,19 +104,6 @@ def test_record_ok_run(db: psycopg.Connection[Any]) -> None:
     assert row["error"] is None
     assert row["output"] == {"answer": "SYNTHETIC OUTPUT"}
     assert row["trace_id"] == "ab" * 16
-
-
-def test_annotate_run_overwrites_verdict_but_keeps_the_rest(db: psycopg.Connection[Any]) -> None:
-    run_id = record_run(db, make_call(), make_result(), posting_id=make_posting(db))
-
-    annotate_run(db, run_id, outcome="invalid", error="validation: x: bad" + "!" * 5000)
-
-    row = run_row(db, run_id)
-    assert row["outcome"] == "invalid"
-    assert row["error"].startswith("validation: x: bad")
-    assert len(row["error"]) == MAX_ERROR_CHARS
-    assert row["output"] == {"answer": "SYNTHETIC OUTPUT"}  # the rejected answer is kept
-    assert row["input_tokens"] == 1000
 
 
 def test_record_uses_result_model(db: psycopg.Connection[Any]) -> None:

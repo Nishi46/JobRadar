@@ -43,12 +43,6 @@ _INSERT = """
     RETURNING id
 """
 
-# Only these two columns change after insert: a run's verdict can depend on checks that
-# run after the call (our validation), and the row must say what that verdict was.
-_ANNOTATE = """
-    UPDATE llm_runs SET outcome = %(outcome)s, error = %(error)s WHERE id = %(id)s
-"""
-
 # One row per (purpose, model, prompt_version): the unit a prompt or model change moves.
 # avg(cost_usd) skips NULLs, so it is the average over *priced* runs; unpriced_runs says
 # how many were left out (a model missing from the price table is unknown, not free).
@@ -147,20 +141,6 @@ def record_run(
         assert row is not None
         run_id: int = row[0]
         return run_id
-
-
-def annotate_run(conn: psycopg.Connection[Any], run_id: int, *, outcome: str, error: str) -> None:
-    """Record our own verdict on a logged run, in its own committed transaction.
-
-    `record_run` stores what the provider returned. Validation in code runs afterwards
-    and can reject an answer the provider called "ok"; without this, the llm_runs row
-    would still say ok and the reason for the retry would be lost. Like record_run, this
-    commits on its own, so the verdict survives a rolled-back state transaction.
-
-    Never pass resume-derived text here for a sensitive call: it is stored as is.
-    """
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_ANNOTATE, {"id": run_id, "outcome": outcome, "error": error[:MAX_ERROR_CHARS]})
 
 
 def cost_summary(conn: psycopg.Connection[Any], since: datetime) -> list[dict[str, Any]]:
