@@ -159,8 +159,8 @@ One row per provider call, whatever the outcome. Evidence, not state: each row i
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | int, default 0 | For Anthropic, `input_tokens` excludes cache tokens; for OpenAI, cached tokens are a subset of input. `pricing.cost_usd` handles both |
 | `cost_usd` | numeric(12,6) null | Null when the model is missing from the price table: unknown, not free |
 | `latency_ms` | int | |
-| `outcome` | text, check in (`ok`, `invalid`, `refused`, `truncated`, `api_error`) | D-015 |
-| `error` | text null | Redacted by `safe_error` for sensitive calls (D-020) |
+| `outcome` | text, check in (`ok`, `invalid`, `refused`, `truncated`, `api_error`) | D-015. `invalid` covers both a schema mismatch and an answer our validation rejected (`extract._record_verdict` updates the row after the checks run); `error` tells them apart |
+| `error` | text null | Redacted by `safe_error` for sensitive calls (D-020). For extraction, `validation: <field>: <message>; ...` when our checks rejected the answer, or `pay disagreement: ...` when the answer was kept but disagreed with ATS pay. This is why a retry happened |
 | `output` | jsonb null | Parsed output, or `{"raw_text": ...}` when it didn't parse. **Always null for sensitive calls** (resumes, re-rank) |
 | `trace_id` | text null | Langfuse/OTel trace id (32 hex); null when tracing is off |
 
