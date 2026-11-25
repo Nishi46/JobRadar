@@ -214,6 +214,25 @@ def test_cli_set_skills_and_show(
     with pytest.raises(SystemExit):
         main(["set-skills", "--name", "sam", "NOPE"])
 
+    main(
+        [
+            "set-filters", "--name", "sam", "--track", "platform", "--seniority", "mid",
+            "--location", "US", "--min-pay", "150000", "--no-remote",
+        ]
+    )  # fmt: skip
+    filters = get_profile(db, "sam")[2]
+    assert (filters.tracks, filters.seniorities, filters.locations) == (
+        ["platform"],
+        ["mid"],
+        ["US"],
+    )
+    assert (filters.min_pay_usd, filters.remote_ok) == (150000, False)
+    # set-filters replaces the whole set: flags left out go back to "no constraint".
+    main(["set-filters", "--name", "sam"])
+    assert get_profile(db, "sam")[2] == MatchFilters()
+    with pytest.raises(SystemExit):
+        main(["set-filters", "--name", "sam", "--track", "not-a-track"])
+
     capsys.readouterr()
     main(["show", "--name", "sam"])
     out = capsys.readouterr().out

@@ -39,6 +39,9 @@ from jobradar.match import (
     passes_filters,
     run_match,
     shown_paragraph_ids,
+    stable_shuffle_key,
+    stage1,
+    track_weight,
     validate_rerank,
 )
 from jobradar.profiles import MatchFilters, ProfileFacts, create_profile
@@ -316,25 +319,112 @@ def test_pay_uses_display_salary_not_raw_llm_ranges() -> None:
 
 
 def test_overlap_required_weighs_double_preferred() -> None:
-    # (1 + 0.5·1) / (2 + 0.5·2) = 1.5 / 3
+    # (1 + 0.5·1) / (2 + 0.5·2 + 2 smoothing) = 1.5 / 5
     score = overlap_score({"PY", "RAG"}, required={"PY", "EVALS"}, preferred={"RAG", "MCP"})
-    assert score == pytest.approx(0.5)
-
-
-def test_overlap_full_match_is_one() -> None:
-    assert overlap_score({"PY", "EVALS", "X"}, required={"PY"}, preferred={"EVALS"}) == 1.0
+    assert score == pytest.approx(0.3)
 
 
 def test_overlap_no_posting_skills_is_zero() -> None:
     assert overlap_score({"PY"}, required=set(), preferred=set()) == 0.0
 
 
-def test_overlap_normalized_by_posting_not_profile() -> None:
-    # A profile with many extra skills isn't penalized; a short posting list doesn't win
-    # just by being short: 1 of 1 and 2 of 2 both score 1.0.
-    assert overlap_score({"PY"}, required={"PY"}, preferred=set()) == 1.0
-    assert overlap_score({"PY", "SQL"}, {"PY", "SQL"}, set()) == 1.0
-    assert overlap_score({"PY"}, required={"PY", "TS"}, preferred=set()) == 0.5
+def test_overlap_more_matched_evidence_beats_a_short_list() -> None:
+    # The live bug: with 23 profile skills, 1,264 postings tied at 1.0, most of them
+    # asking for a single skill. Smoothing makes 6 of 6 outrank 1 of 1.
+    six = {"PY", "TS", "SQL", "EVALS", "RAG", "MCP"}
+    assert overlap_score(six, required=six, preferred=set()) > overlap_score(
+        six, required={"PY"}, preferred=set()
+    )
+    assert overlap_score({"PY"}, required={"PY"}, preferred=set()) == pytest.approx(1 / 3)
+
+
+def test_overlap_is_normalized_by_the_posting_not_the_profile() -> None:
+    # Extra profile skills don't lower the score.
+    assert overlap_score({"PY"}, {"PY", "TS"}, set()) == overlap_score(
+        {"PY", "A", "B", "C"}, {"PY", "TS"}, set()
+    )
+
+
+def test_overlap_never_reaches_one() -> None:
+    many = {f"S{i}" for i in range(30)}
+    assert overlap_score(many, required=many, preferred=set()) < 1.0
+
+
+# --- track weight ------------------------------------------------------------------
+
+
+def test_track_weight_without_profile_tracks_is_neutral() -> None:
+    assert track_weight(["other"], []) == 1.0
+
+
+def test_track_weight_ordering() -> None:
+    mine = ["platform", "product"]
+    match = track_weight(["research", "platform"], mine)
+    unknown = track_weight(["unknown"], mine)
+    other_ai = track_weight(["research"], mine)
+    other = track_weight(["other"], mine)
+    assert match == 1.0
+    assert match > unknown > other_ai > other > 0  # `other` is demoted, never removed
+
+
+def test_stage1_demotes_other_track_below_a_weaker_skill_match() -> None:
+    profile = ProfileFacts(
+        skills=["PY", "TS", "SQL"], tracks=["platform"], seniority="mid", years_experience=2
+    )
+    sales = row(1, make_facts(tracks=["other"], required=["PY", "TS", "SQL"]))
+    platform = row(2, make_facts(tracks=["platform"], required=["PY", "GO"]))
+
+    ranked, passed = stage1([sales, platform], profile, MatchFilters(), top_k=10)
+
+    assert [r.posting_id for r, _ in ranked] == [2, 1]
+    assert passed == 2
+
+
+# --- stage-1 tie-breaks ------------------------------------------------------------
+
+
+def row(
+    posting_id: int, facts: PostingFacts, *, first_seen: datetime | None = None
+) -> CandidateRow:
+    return CandidateRow(
+        posting_id=posting_id,
+        company=f"Company {posting_id}",
+        title="Engineer",
+        url=f"https://example.com/jobs/{posting_id}",
+        first_seen=first_seen or datetime(2026, 11, 21, 23, 45, tzinfo=UTC),
+        paragraphs=[{"id": 1, "text": "Synthetic paragraph."}],
+        facts=facts,
+        display_salary=facts.salary.ranges,
+    )
+
+
+def test_ties_on_the_same_day_ignore_seconds_and_use_the_stable_shuffle() -> None:
+    # A bulk ingest stamps every posting within minutes; seconds must not decide the
+    # order (that sorted the live feed by company name).
+    base = datetime(2026, 11, 21, 23, 45, tzinfo=UTC)
+    rows = [
+        row(i, make_facts(required=["PY"]), first_seen=base + timedelta(seconds=i))
+        for i in range(1, 21)
+    ]
+
+    ranked, _ = stage1(rows, PROFILE, MatchFilters(), top_k=20)
+
+    assert [r.posting_id for r, _ in ranked] == sorted(range(1, 21), key=stable_shuffle_key)
+
+
+def test_ties_prefer_a_newer_day() -> None:
+    old = row(1, make_facts(required=["PY"]), first_seen=datetime(2026, 11, 1, tzinfo=UTC))
+    new = row(2, make_facts(required=["PY"]), first_seen=datetime(2026, 11, 20, tzinfo=UTC))
+
+    ranked, _ = stage1([old, new], PROFILE, MatchFilters(), top_k=2)
+
+    assert [r.posting_id for r, _ in ranked] == [2, 1]
+
+
+def test_stable_shuffle_is_deterministic_and_not_id_order() -> None:
+    ids = list(range(1, 50))
+    assert sorted(ids, key=stable_shuffle_key) == sorted(ids, key=stable_shuffle_key)
+    assert sorted(ids, key=stable_shuffle_key) != ids
 
 
 # --- rerank validation (pure) ------------------------------------------------------
@@ -563,7 +653,7 @@ def test_run_match_filters_scores_reranks_and_writes_the_feed(db: Conn, board: i
 
     assert run_row(db, run_id) == (3, 2, 2, "ok")
     rows = matches(db, run_id)
-    # stage-1: good (1.0) before ok (0.5); final: the re-ranker's order.
+    # stage-1: good (2 of 2) before ok (1 of 2); final: the re-ranker's order.
     assert [(r[0], r[1], r[2]) for r in rows] == [(ok, 2, 1), (good, 1, 2)]
     assert rows[0][3:] == ("Platform role using Python.", [2], ["TS"])
 
@@ -619,16 +709,17 @@ def test_run_match_partial_rerank_appends_missing_in_stage1_order(db: Conn, boar
     a = add_posting(db, board, "a", make_facts(required=["PY"]))
     b = add_posting(db, board, "b", make_facts(required=["PY", "EVALS", "TS"]))
     c = add_posting(db, board, "c", make_facts(required=["PY", "TS"]))
-    # Stage 1: a (1.0), b (0.67), c (0.5). The model returns c, a bogus id, and a bad
-    # citation for a: c is kept, then the rest follow in stage-1 order.
+    # Stage 1 (smoothed, D-022): b (2/5 = 0.40), a (1/3 = 0.33), c (1/4 = 0.25). The model
+    # returns c, a bogus id, and a bad citation for a: c is kept, then the rest follow in
+    # stage-1 order.
     output = RerankOutput(matches=[item(c), item(999), item(a, evidence=[42])])
     provider = FakeProvider(llm_result(output))
 
     run_id = run_match(db, "tester", provider=provider)
 
     rows = matches(db, run_id)
-    assert [(r[0], r[2]) for r in rows] == [(c, 1), (a, 2), (b, 3)]
-    assert rows[1][3] is None  # dropped items get no "why"
+    assert [(r[0], r[2]) for r in rows] == [(c, 1), (b, 2), (a, 3)]
+    assert rows[2][3] is None  # dropped items get no "why"
     assert run_row(db, run_id)[2:] == (1, "ok")
 
 

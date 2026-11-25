@@ -16,6 +16,14 @@ Every non-obvious technical choice: a library, a schema shape, a metric, a thres
 
 ---
 
+## D-022 · 2026-11-25 · Stage-1 score: smoothed overlap x soft track weight, day-level freshness, stable shuffle for ties
+
+**Context:** The first live feed (one real profile with 23 of 34 skill codes, the full 4,668-posting backfill) was broken: 1,264 postings tied at a perfect overlap of 1.0, mostly ones asking for a single skill, and 671 of those were `other` (sales, ops). Ties went to the newest `first_seen`, but a bulk ingest stamps every posting within ~3 minutes in board order, so "newest" meant "company name late in the alphabet" and four companies took all 20 slots. The profile's own `tracks` played no part unless set as a hard filter.
+**Options considered:** Hard-filter `other` (simple, but drops borderline roles nobody ever sees, against D-004); raise the bar to a minimum skill count (an arbitrary threshold); additive smoothing of the overlap plus a soft track multiplier (keeps everything visible, rewards more matched evidence, and uses the profile's tracks).
+**Decision:** `fit_score = overlap x track_weight`. Overlap = weighted hits / (weighted posting skills + 2). Track weight 1.0 when a posting track is one of the profile's, 0.8 `unknown`, 0.6 another AI track, 0.25 `other`, and 1.0 for everything when the profile names no tracks. Ties: newer *day* first, then more skill evidence, then a fixed hash of the posting id. Hard filters can now be changed with `make profile ARGS="set-filters ..."`.
+**Why:** Smoothing is a prior of "two skills we don't know you have": 1 of 1 scores 0.33, 6 of 6 scores 0.75, so evidence counts. A multiplier keeps `other` visible but demoted (D-004), and lets a strong AI-track match beat a perfect sales match. Day-level freshness keeps "newer first" meaningful once polling is incremental, without letting poll order decide. The hash spreads companies and stays deterministic. Result on the same profile: 18 companies in the top 20, all engineering.
+**Revisit if:** M3/M4 feedback shows good roles below rank 20 (tune the smoothing or weights against labeled data instead of by eye), or users with no tracks get a feed dominated by `other`.
+
 ## D-021 · 2026-11-21 · Matching: permissive filters as built, a posting-normalized overlap score, and a re-rank checked in code
 
 **Context:** D-004 set the filter rules in words. Building them raised cases it didn't cover: a `remote_policy` of `unknown` with no location match, pay in other currencies, which display value the pay filter reads, and what to do when the re-ranker's output is partly wrong.

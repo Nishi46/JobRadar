@@ -74,6 +74,8 @@ Run `make dev` once after pulling M2, so migration 0003 is applied.
 | `make extract LIMIT=25` | Enqueue up to 25 stale postings and extract them. Costs money; drop `LIMIT` for all of them. Ends with a summary line: ok / failed / not finished, cost total and per posting, latency p50 / p95 |
 | `make profile ARGS="create --name me --resume ~/resume.md --min-pay 150000 --location 'New York, NY'"` | Extract a profile from a resume. Also `--track`, `--seniority` (repeatable) and `--no-remote` |
 | `make profile ARGS="show --name me"` / `set-skills --name me CODE ...` / `forget-resume --name me` | Show facts and filters (never the resume), replace skill codes, delete the stored resume text |
+| `make profile ARGS="set-filters --name me --track platform --seniority mid --location US --min-pay 150000"` | Replace the hard filters (same flags as `create`); any flag left out means no constraint |
+| `make test` | Unit tests against a separate `jobradar_test` database (created and migrated on demand by `make test-db`), never the dev data |
 | `make match PROFILE=me` | Run both matching stages and print the feed (links to the original postings, never descriptions) |
 | `make cost` | LLM spend for the last 7 days by purpose, model and prompt version (from `llm_runs`) |
 

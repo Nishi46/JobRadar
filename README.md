@@ -13,7 +13,7 @@ cp .env.example .env   # local-only dummy credentials
 make dev               # start Postgres, apply migrations
 make seed              # load the ~165 seed boards into `boards`
 make ingest            # fetch every due board into `postings` (about 3.5 min the first time)
-make test lint         # 548 tests; ruff + mypy strict
+make test lint         # 556 tests on a separate test DB; ruff + mypy strict
 ```
 
 M2 needs `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `.env` (Langfuse keys are optional; tracing is off without them). These cost money:

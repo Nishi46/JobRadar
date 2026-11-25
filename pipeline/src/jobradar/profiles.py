@@ -278,11 +278,13 @@ def _parser() -> argparse.ArgumentParser:
     create = sub.add_parser("create", help="extract a profile from a resume file")
     create.add_argument("--name", required=True)
     create.add_argument("--resume", required=True, type=Path, help="path to a text/markdown resume")
-    create.add_argument("--min-pay", type=int, help="minimum annual pay in USD")
-    create.add_argument("--location", action="append", default=[], help="repeatable")
-    create.add_argument("--track", action="append", default=[], help="repeatable")
-    create.add_argument("--seniority", action="append", default=[], help="repeatable")
-    create.add_argument("--no-remote", action="store_true", help="exclude remote-only postings")
+    _add_filter_flags(create)
+
+    set_filters = sub.add_parser(
+        "set-filters", help="replace the profile's hard filters (omitted flags = no constraint)"
+    )
+    set_filters.add_argument("--name", required=True)
+    _add_filter_flags(set_filters)
 
     show = sub.add_parser("show", help="print facts and filters (never the resume)")
     show.add_argument("--name", required=True)
@@ -296,6 +298,25 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--min-pay", type=int, help="minimum annual pay in USD")
+    parser.add_argument("--location", action="append", default=[], help="repeatable")
+    parser.add_argument("--track", action="append", default=[], help="repeatable")
+    parser.add_argument("--seniority", action="append", default=[], help="repeatable")
+    parser.add_argument("--no-remote", action="store_true", help="exclude remote-only postings")
+
+
+def _filters_from_args(args: argparse.Namespace) -> MatchFilters:
+    # Pydantic checks the track/seniority values the user typed.
+    return MatchFilters(
+        tracks=args.track,
+        seniorities=args.seniority,
+        locations=args.location,
+        remote_ok=not args.no_remote,
+        min_pay_usd=args.min_pay,
+    )
+
+
 def _print_profile(facts: ProfileFacts, filters: MatchFilters) -> None:
     print(json.dumps({"facts": facts.model_dump(), "filters": filters.model_dump()}, indent=2))
 
@@ -306,14 +327,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         with connect(autocommit=True) as conn:
             if args.cmd == "create":
-                # Pydantic checks the track/seniority values the user typed.
-                filters = MatchFilters(
-                    tracks=args.track,
-                    seniorities=args.seniority,
-                    locations=args.location,
-                    remote_ok=not args.no_remote,
-                    min_pay_usd=args.min_pay,
-                )
+                filters = _filters_from_args(args)
                 init_tracing()
                 prompt = load_prompt(PROMPT_NAME)
                 resume_text = args.resume.read_text()
@@ -326,6 +340,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                 )
                 _print_profile(facts, filters)
             elif args.cmd == "show":
+                _, facts, filters = get_profile(conn, args.name)
+                _print_profile(facts, filters)
+            elif args.cmd == "set-filters":
+                update_profile(conn, args.name, filters=_filters_from_args(args))
                 _, facts, filters = get_profile(conn, args.name)
                 _print_profile(facts, filters)
             elif args.cmd == "set-skills":

@@ -134,7 +134,7 @@ Turn each posting into a structured record you can score, and rank postings for 
 
 - [x] Every open posting has a `posting_facts` row and an `llm_runs` row with a `trace_id`. Full backfill 2026-11-24: 4,668/4,668 `ok`, 0 failed, 0 untraced; 340 postings (7%) needed the repair retry, all fixed by it
 - [x] Cost per posting known from `make cost` (estimate was $3–5 for the 4,668-posting backfill, D-014). Measured on the full backfill (2026-11-24): $2.87 total, $0.00061 per posting (the first 25-posting sample said $0.00040, but all 25 came from one company with short postings); prompt caching confirmed (5,630 cached tokens read on every call after the first)
-- [ ] My own match feed (`make match PROFILE=me`) looks sensible, and the measured re-rank cost per run is compared with DESIGN's ≤ $0.05 per user per week
+- [ ] My own match feed (`make match PROFILE=me`) looks sensible, and the measured re-rank cost per run is compared with DESIGN's ≤ $0.05 per user per week. Measured 2026-11-25: $0.030 and $0.041 per run (~21-24 s), so one run a week fits the budget and daily (~$0.29/week) does not. The first feed was broken by stage-1 ties and fixed in D-022; whether the fixed feed is sensible is my call
 
 **Prompt versions and `make eval`:** CLAUDE.md says any prompt change must bump its version and pass `make eval` before it's committed. `make eval` doesn't exist until M3, so that rule can't be satisfied yet. The three v1 prompts (`extract_posting`, `extract_profile`, `rerank`) are the baseline the M3 harness will measure first; don't change them before M3 without bumping the version.
 

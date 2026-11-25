@@ -10,7 +10,8 @@ skill overlap is set arithmetic:
    filtered out is a miss nobody ever sees; a borderline one that gets through is
    visible and becomes feedback. So `unknown` passes, and the pay filter uses the most
    generous reading that's still honest.
-3. **Score** (`overlap_score`), then the top k by score, newer first on ties.
+3. **Score** (`fit_score` = smoothed `overlap_score` x `track_weight`), then the top k.
+   Ties go to the newer *day*, then more skill evidence, then a stable shuffle (D-022).
 
 Stage 2 sends those k to the re-rank model, which orders them and writes a one-sentence
 "why" citing paragraph ids plus "skills to learn". Its output is validated item by item
@@ -29,6 +30,7 @@ model's output that matters (why, skills) is stored in `matches` anyway.
 """
 
 import argparse
+import hashlib
 import logging
 import sys
 from collections.abc import Sequence
@@ -57,6 +59,17 @@ PROMPT_NAME = "rerank"
 HOURS_PER_YEAR = 2080  # 40 h x 52 weeks (D-004)
 # Preferred skills count half as much as required ones in the overlap score.
 PREFERRED_WEIGHT = 0.5
+# Added to the overlap denominator, like two phantom unmatched skills, so a posting that
+# asks for one skill you have can't tie with one that asks for six (D-022). Without it a
+# broad profile (23 skills) put 1,264 postings at a perfect 1.0.
+OVERLAP_SMOOTHING = 2.0
+# Multipliers on the overlap score from the posting's track vs the profile's tracks
+# (D-022). Soft on purpose: hard track rules belong to MatchFilters, and D-004 says a
+# borderline posting should stay visible, so `other` is demoted, never removed.
+TRACK_WEIGHT_MATCH = 1.0
+TRACK_WEIGHT_UNKNOWN = 0.8  # can't tell, so close to neutral
+TRACK_WEIGHT_OTHER_AI = 0.6  # an AI engineering track, just not one the user named
+TRACK_WEIGHT_OTHER = 0.25  # not AI engineering at all (sales, ops, ...)
 
 
 class RerankItem(BaseModel):
@@ -171,39 +184,77 @@ def passes_filters(row: CandidateRow, filters: MatchFilters) -> bool:
 
 
 def overlap_score(profile_skills: set[str], required: set[str], preferred: set[str]) -> float:
-    """Weighted share of the posting's skills that the profile has, in 0..1.
+    """Smoothed, weighted share of the posting's skills that the profile has, in [0, 1).
 
     Required skills weigh 1 and preferred 0.5, because missing a requirement matters more
     than missing a nice-to-have. The denominator is the *posting's* weighted skill count,
-    not the profile's: a profile with many extra skills isn't penalized, and the score
-    reads as "how much of what they ask for do I have". A posting with no skills scores
-    0: there's no evidence of fit, so it sorts below any real overlap (it can still be
-    re-ranked up if it makes the top k).
+    so a profile with many extra skills isn't penalized, plus OVERLAP_SMOOTHING: more
+    matched evidence then means a higher score (1 of 1 -> 0.33, 6 of 6 -> 0.75). A posting
+    with no skills scores 0: no evidence of fit.
     """
     denominator = len(required) + PREFERRED_WEIGHT * len(preferred)
     if denominator == 0:
         return 0.0
     hits = len(required & profile_skills) + PREFERRED_WEIGHT * len(preferred & profile_skills)
-    return hits / denominator
+    return hits / (denominator + OVERLAP_SMOOTHING)
 
 
-def _score(row: CandidateRow, skills: set[str]) -> float:
-    return overlap_score(
-        skills,
+def track_weight(posting_tracks: Sequence[str], profile_tracks: Sequence[str]) -> float:
+    """How well the posting's track(s) fit the tracks on the profile, as a multiplier.
+
+    No profile tracks means no preference (1.0). Any shared track is a full match; a
+    posting may list several tracks and only needs one of them to fit.
+    """
+    if not profile_tracks:
+        return TRACK_WEIGHT_MATCH
+    if any(t in profile_tracks for t in posting_tracks):
+        return TRACK_WEIGHT_MATCH
+    if "unknown" in posting_tracks:
+        return TRACK_WEIGHT_UNKNOWN
+    if all(t == "other" for t in posting_tracks):
+        return TRACK_WEIGHT_OTHER
+    return TRACK_WEIGHT_OTHER_AI
+
+
+def fit_score(row: CandidateRow, facts: ProfileFacts) -> float:
+    overlap = overlap_score(
+        set(facts.skills),
         required={s.code for s in row.facts.required_skills},
         preferred={s.code for s in row.facts.preferred_skills},
     )
+    return overlap * track_weight(row.facts.track.value, facts.tracks)
+
+
+def stable_shuffle_key(posting_id: int) -> bytes:
+    """A fixed pseudo-random order for exact ties. Sorting ties by id or by first_seen
+    seconds groups postings by board (boards are polled one after another), which let
+    four companies take the whole feed. A hash spreads them out, and the same run twice
+    still gives the same order."""
+    return hashlib.blake2b(str(posting_id).encode(), digest_size=8).digest()
+
+
+def _skill_count(row: CandidateRow) -> int:
+    return len(row.facts.required_skills) + len(row.facts.preferred_skills)
 
 
 def stage1(
     rows: list[CandidateRow], facts: ProfileFacts, filters: MatchFilters, top_k: int
 ) -> tuple[list[tuple[CandidateRow, float]], int]:
     """Filter, score and keep the top k. Returns (ranked rows with scores, passed count).
-    Ties go to the newer posting (fresher roles are more actionable), then lower id so
-    the order is deterministic."""
-    skills = set(facts.skills)
-    passed = [(r, _score(r, skills)) for r in rows if passes_filters(r, filters)]
-    passed.sort(key=lambda rs: (-rs[1], -rs[0].first_seen.timestamp(), rs[0].posting_id))
+
+    Ties: the newer *day* first (fresher roles are more actionable, but within one day
+    first_seen only says which board was polled first), then the posting with more skill
+    evidence, then the stable shuffle.
+    """
+    passed = [(r, fit_score(r, facts)) for r in rows if passes_filters(r, filters)]
+    passed.sort(
+        key=lambda rs: (
+            -rs[1],
+            -rs[0].first_seen.date().toordinal(),
+            -_skill_count(rs[0]),
+            stable_shuffle_key(rs[0].posting_id),
+        )
+    )
     return passed[:top_k], len(passed)
 
 

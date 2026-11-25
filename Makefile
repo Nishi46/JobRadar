@@ -5,7 +5,7 @@ export
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: dev down seed poll work ingest extract match profile cost test lint eval eval-holdout
+.PHONY: dev down seed poll work ingest extract match profile cost test test-db lint eval eval-holdout
 
 # Start Postgres, wait for its healthcheck, then apply migrations.
 # Starting the API gets added here in M4.
@@ -54,8 +54,20 @@ cost:
 down:
 	$(COMPOSE) down
 
-test:
-	cd pipeline && uv run pytest
+# Tests use their own database so they never touch (or slow down on) the dev data:
+# each test empties the tables inside a rolled-back transaction, which took ~7 s per test
+# against the full 4,668-posting backfill. Created and migrated on demand; safe to rerun.
+TEST_DB ?= jobradar_test
+TEST_DATABASE_URL ?= postgresql+psycopg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:$(POSTGRES_PORT)/$(TEST_DB)
+
+test-db:
+	@$(COMPOSE) exec -T postgres psql -U $(POSTGRES_USER) -d postgres -tAc \
+		"SELECT 1 FROM pg_database WHERE datname = '$(TEST_DB)'" | grep -q 1 \
+		|| $(COMPOSE) exec -T postgres createdb -U $(POSTGRES_USER) $(TEST_DB)
+	cd pipeline && DATABASE_URL=$(TEST_DATABASE_URL) uv run alembic upgrade head
+
+test: test-db
+	cd pipeline && DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
 
 # web/ does not exist until M4; its lint and type check get added then.
 lint:
